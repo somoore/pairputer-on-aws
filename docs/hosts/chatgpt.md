@@ -58,10 +58,16 @@ metadata chain from step 1 working):
   `https://chatgpt.com/connector/oauth/<id>`. **Copy it - you need it in step 4.**
 - **OAuth Client ID:** the `ChatGPTClientId` stack output.
 - **OAuth Client Secret:** leave empty. **Token endpoint auth method:** `none` (public PKCE client).
-- **Default scopes:** leave as discovered. (Don't bother unchecking email/phone/profile - the
-  connect flow requests everything Cognito advertises regardless; the Cognito client allows the
-  full standard set for exactly this reason. See Walls below.)
-- **Base scopes:** add `pairputer-mcp/invoke`.
+- **Base scopes - REQUIRED, do not skip:** add **`pairputer-mcp/invoke`**. This is the load-bearing
+  step. Without it, Cognito login succeeds and returns a token, but the token LACKS the scope the
+  AgentCore runtime requires → ChatGPT connects then fails MCP tool discovery with
+  `MCP_ACTION_DISCOVERY_FAILED` / "Authentication succeeded, action discovery failed" / HTTP 401
+  "Reauthentication required". (The working Codex config proves the requirement:
+  `scopes = ["openid", "pairputer-mcp/invoke"]`.) The password, callback, and client id can all be
+  correct and it still fails on this one missing scope.
+- **Default scopes** (`openid email phone profile`): leave as discovered - the connect flow requests
+  everything Cognito advertises regardless, and the Cognito client allows the full standard set for
+  exactly this reason (see Walls below). The extra base scope above is what you must ADD.
 
 Check **"I understand and want to continue"** → **Create**.
 
@@ -110,6 +116,7 @@ app automatically.
 |---|---|---|
 | OAuth popup opens, instantly closes, red OpenAI error | ChatGPT's connect flow requests **every** scope in Cognito's discovery (`openid email phone profile`) regardless of the connector's scope config; the client rejected the extras → `invalid_scope` bounce | The `ChatGPTClient` in `identity.yaml` allows the full standard OIDC set + `pairputer-mcp/invoke`. If you see this on an old stack, redeploy identity or `wire-chatgpt.sh --register-callback` (it re-asserts scopes too). Diagnose by replaying `/oauth2/authorize` with curl and bisecting scopes; allow ~1 min for Cognito config propagation |
 | Cognito error page shows `invalid_request` with a client_id that isn't in your pool | The connector pins the OAuth client of a DELETED/replaced stack; "Reconnect" cannot fix it | Fully remove the connector and re-add it with the new stack's `McpEndpoint`, then re-do Step 4 (the recreated connector has a NEW callback id) |
+| Connects OK, then `MCP_ACTION_DISCOVERY_FAILED` / "Authentication succeeded, action discovery failed" / HTTP 401 "Reauthentication required" | The access token is missing the **`pairputer-mcp/invoke`** base scope, so AgentCore rejects it at tool discovery. Auth (password + callback) is fine; the scope is the problem. | In the connector's Advanced OAuth settings, add `pairputer-mcp/invoke` as a **Base scope**, then Disconnect + reconnect. Confirmed root cause 2026-07-17. |
 | OAuth popup shows Cognito error page | Callback not registered (`redirect_mismatch`) | Step 4 |
 | OAuth `redirect_mismatch` AFTER a deploy (was working before) | **Every `deploy.sh` re-deploys identity.yaml, and CloudFormation RESETS the ChatGPT client CallbackURLs to just the static legacy URL - dropping the per-connector callback ChatGPT uses.** | Re-run `substrate/wire-chatgpt.sh --register-callback '<the connector callback URL>'` after any deploy. The connector's callback id is stable per connector instance, so it's the same URL as before unless you deleted+recreated the connector. (wire-chatgpt.sh preserves existing callbacks + the full scope set.) |
 | Any call errors: `unknown image_id: …` | A caller used a stale or guessed id | Expected fail-closed behavior. Run `list_capsules` and retry with the exact registered id; the widget itself defaults to the current capsule. |
