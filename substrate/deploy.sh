@@ -574,30 +574,30 @@ while :; do
   fi
 
   # Was this the flaky MicrovmImage, or a real failure?
+  # NOTE: do NOT filter events with JMESPath contains(ResourceStatusReason, ...) — many events carry a
+  # null reason, and contains() on null throws "invalid type for value: None", which makes the WHOLE
+  # query fail and silently returns nothing, so the flake goes undetected and the retry never fires
+  # (exactly what aborted the first real deploys). Pull the reasons/ids as plain text and grep them.
+  events_have_flake() {  # $1 = stack name/arn; 0 if events mention the image flake
+    aws cloudformation describe-stack-events --stack-name "$1" --region "${AWS_REGION}" \
+      --query 'StackEvents[].[ResourceStatusReason,LogicalResourceId]' --output text 2>/dev/null \
+      | grep -qiE "did not stabilize|Microvm|DoomImage"
+  }
   IMAGE_FLAKE="false"
   if echo "${DEPLOY_OUTPUT}" | grep -qiE "did not stabilize|MicrovmImage"; then
     IMAGE_FLAKE="true"
+  elif events_have_flake "${STACK_NAME}"; then
+    IMAGE_FLAKE="true"
   else
-    # deploy output doesn't always echo the resource reason; check stack events too.
-    if aws cloudformation describe-stack-events --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
-        --query "StackEvents[?contains(ResourceStatusReason,'did not stabilize') || contains(LogicalResourceId,'Microvm') || contains(LogicalResourceId,'DoomImage')].ResourceStatusReason" \
-        --output text 2>/dev/null | grep -qiE "stabilize|Microvm|DoomImage"; then
+    # CRITICAL: the "did not stabilize" reason lives in the NESTED DoomImageStack's events, not the
+    # ROOT stack's (the root only shows the generic "Embedded stack ... was not successfully
+    # created"). So also scan the DoomImageStack nested stack directly — without this, the retry
+    # never fires for a nested-stack MicroVM flake and a transient failure aborts the whole deploy.
+    DOOM_NESTED_ARN="$(aws cloudformation describe-stack-resource \
+      --stack-name "${STACK_NAME}" --logical-resource-id DoomImageStack --region "${AWS_REGION}" \
+      --query 'StackResourceDetail.PhysicalResourceId' --output text 2>/dev/null || true)"
+    if [[ -n "${DOOM_NESTED_ARN}" && "${DOOM_NESTED_ARN}" != "None" ]] && events_have_flake "${DOOM_NESTED_ARN}"; then
       IMAGE_FLAKE="true"
-    else
-      # CRITICAL: the "did not stabilize" reason lives in the NESTED DoomImageStack's events, not the
-      # ROOT stack's (the root only shows the generic "Embedded stack ... was not successfully
-      # created"). So also scan the DoomImageStack nested stack directly — without this, the retry
-      # never fires for a nested-stack MicroVM flake and a transient failure aborts the whole deploy.
-      DOOM_NESTED_ARN="$(aws cloudformation describe-stack-resource \
-        --stack-name "${STACK_NAME}" --logical-resource-id DoomImageStack --region "${AWS_REGION}" \
-        --query 'StackResourceDetail.PhysicalResourceId' --output text 2>/dev/null || true)"
-      if [[ -n "${DOOM_NESTED_ARN}" && "${DOOM_NESTED_ARN}" != "None" ]]; then
-        if aws cloudformation describe-stack-events --stack-name "${DOOM_NESTED_ARN}" --region "${AWS_REGION}" \
-            --query "StackEvents[?contains(ResourceStatusReason,'did not stabilize')].ResourceStatusReason" \
-            --output text 2>/dev/null | grep -qi "stabilize"; then
-          IMAGE_FLAKE="true"
-        fi
-      fi
     fi
   fi
 
