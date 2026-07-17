@@ -152,9 +152,12 @@ Parameters:
     Description: Exact OAuth callback URL Codex uses.
   CognitoDomainPrefix:
     Type: String
-    Default: pairputer-prod-auth
-    Description: Lowercase Cognito hosted UI domain prefix. Must be unique in the region.
-    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+    Default: ""
+    Description: >-
+      Lowercase Cognito hosted-UI domain prefix. Cognito domains are GLOBALLY unique across ALL AWS
+      accounts, so leave this blank (default) and the stack derives a unique one from your account id
+      (pairputer-<accountid>). Only set it if you want a custom prefix and know it's free.
+    AllowedPattern: '^$|^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
   CapsuleManifestJson:
     Type: String
     Default: ""
@@ -270,6 +273,8 @@ Rules:
         AssertDescription: Set DoomCodeArtifactUri and DoomCodeArtifactBucket, or set DoomImageArnOverride.
 
 Conditions:
+  # Blank CognitoDomainPrefix -> derive a globally-unique one from the account id (see IdentityStack).
+  HasCustomCognitoDomain: !Not [!Equals [!Ref CognitoDomainPrefix, ""]]
   # Public (default) = pairputer public-ECR images + API-backed AgentCore custom resource.
   # Private = bring-your-own private-ECR images + native AgentCore resource.
   UsePrivateImages: !Equals [!Ref ImageSource, Private]
@@ -442,7 +447,10 @@ Resources:
       TemplateURL: nested/identity.yaml
       Parameters:
         CodexCallbackUrl: !Ref CodexCallbackUrl
-        CognitoDomainPrefix: !Ref CognitoDomainPrefix
+        CognitoDomainPrefix: !If
+          - HasCustomCognitoDomain
+          - !Ref CognitoDomainPrefix
+          - !Sub "pairputer-${AWS::AccountId}"
         SuperAdminEmail: !Ref SuperAdminEmail
         CreateSuperAdminUser: !Ref CreateSuperAdminUser
 

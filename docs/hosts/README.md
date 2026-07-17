@@ -34,7 +34,7 @@ www-authenticate: Bearer resource_metadata="https://bedrock-agentcore.us-east-1.
 and that URL returns 200 with a valid RFC 9728 document:
 
 ```json
-{"authorization_servers":["https://cognito-idp.us-east-1.amazonaws.com/us-east-1_3G4qFi1nZ"],
+{"authorization_servers":["https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE01"],
  "resource":"https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<escaped-arn>/invocations?qualifier=DEFAULT"}
 ```
 
