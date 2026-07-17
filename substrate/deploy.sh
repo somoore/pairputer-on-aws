@@ -596,6 +596,10 @@ aws cloudformation describe-stacks \
 #     admin-set-user-password — no email dependency. Use this when COGNITO_DEFAULT email is unreliable
 #     (it is best-effort and rate-limited ~50/day — repeated deploys or strict mail servers can drop the
 #     invite silently). The password is typed locally, never passed to CloudFormation.
+#   PAIRPUTER_ADMIN_PASSWORD_AUTO=1: HEADLESS/CI — the script generates a strong random password (via
+#     AWS get-random-password), sets it permanent, and stores it in Secrets Manager at
+#     pairputer/super-admin/<email>. No prompt, no email, no value chosen/typed by a human, nothing in
+#     CloudFormation. Retrieve it with `aws secretsmanager get-secret-value --secret-id ...`.
 # Idempotent: skips creation if the user exists. Opt out entirely with PAIRPUTER_SKIP_ADMIN_CREATE=1.
 if [[ "${PAIRPUTER_SKIP_ADMIN_CREATE:-0}" != "1" && -n "${SUPER_ADMIN_EMAIL}" ]]; then
   USER_POOL_ID="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
@@ -613,7 +617,50 @@ if [[ "${PAIRPUTER_SKIP_ADMIN_CREATE:-0}" != "1" && -n "${SUPER_ADMIN_EMAIL}" ]]
       echo "==> Super-admin '${SUPER_ADMIN_EMAIL}' already exists; not recreating."
     fi
 
-    if [[ "${PAIRPUTER_ADMIN_PASSWORD_PROMPT:-0}" == "1" ]]; then
+    if [[ "${PAIRPUTER_ADMIN_PASSWORD_AUTO:-0}" == "1" ]]; then
+      # Headless path: the SCRIPT generates a strong random password, sets it on the user, and stores
+      # it in AWS Secrets Manager (this account) so it's never chosen/typed by a human and never
+      # printed. Retrieve it later with:
+      #   aws secretsmanager get-secret-value --secret-id pairputer/super-admin/<email> --query SecretString --output text
+      # Not passed to CloudFormation (that path is intentionally rejected above). For unattended/CI
+      # deploys where a working login is needed immediately without an email round-trip.
+      if [[ "${ADMIN_EXISTS}" != "true" ]]; then
+        echo "==> Creating super-admin '${SUPER_ADMIN_EMAIL}' (auto password -> Secrets Manager, no email)..."
+        aws cognito-idp admin-create-user --user-pool-id "${USER_POOL_ID}" \
+          --username "${SUPER_ADMIN_EMAIL}" \
+          --user-attributes "Name=email,Value=${SUPER_ADMIN_EMAIL}" "Name=email_verified,Value=true" \
+          --message-action SUPPRESS \
+          --region "${AWS_REGION}" >/dev/null 2>&1 || true
+        aws cognito-idp admin-add-user-to-group --user-pool-id "${USER_POOL_ID}" \
+          --username "${SUPER_ADMIN_EMAIL}" --group-name SuperAdmins --region "${AWS_REGION}" >/dev/null 2>&1 || true
+      fi
+      # Generate a policy-satisfying password (>=16 chars, upper/lower/number/symbol) via AWS, so the
+      # value is never authored locally. --require-each-included-type guarantees the Cognito policy.
+      HB_ADMIN_PW="$(aws secretsmanager get-random-password --region "${AWS_REGION}" \
+        --password-length 24 --require-each-included-type --exclude-punctuation \
+        --query RandomPassword --output text 2>/dev/null)$(printf '!Aa1')"
+      HB_ADMIN_SECRET_ID="pairputer/super-admin/${SUPER_ADMIN_EMAIL}"
+      if [[ -n "${HB_ADMIN_PW}" ]]; then
+        if aws cognito-idp admin-set-user-password --user-pool-id "${USER_POOL_ID}" \
+             --username "${SUPER_ADMIN_EMAIL}" --password "${HB_ADMIN_PW}" --permanent \
+             --region "${AWS_REGION}" >/dev/null 2>&1; then
+          # Store (or rotate) the secret so the owner can retrieve it; never echoed to the terminal.
+          if aws secretsmanager describe-secret --secret-id "${HB_ADMIN_SECRET_ID}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            aws secretsmanager put-secret-value --secret-id "${HB_ADMIN_SECRET_ID}" \
+              --secret-string "${HB_ADMIN_PW}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+          else
+            aws secretsmanager create-secret --name "${HB_ADMIN_SECRET_ID}" \
+              --description "pairputer super-admin password for ${SUPER_ADMIN_EMAIL} (auto-generated headless)" \
+              --secret-string "${HB_ADMIN_PW}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+          fi
+          echo "    Password set + stored in Secrets Manager: ${HB_ADMIN_SECRET_ID}"
+          echo "    Retrieve: aws secretsmanager get-secret-value --secret-id ${HB_ADMIN_SECRET_ID} --query SecretString --output text"
+        else
+          echo "    Could not set the auto password (check the pool password policy)." >&2
+        fi
+        unset HB_ADMIN_PW
+      fi
+    elif [[ "${PAIRPUTER_ADMIN_PASSWORD_PROMPT:-0}" == "1" ]]; then
       # Local-password path: create WITHOUT an email invite, then set a permanent password typed here.
       if [[ "${ADMIN_EXISTS}" != "true" ]]; then
         echo "==> Creating super-admin '${SUPER_ADMIN_EMAIL}' (local password, no email)..."
