@@ -17,6 +17,17 @@ Parameters:
     Type: String
     Default: refs/heads/main
     Description: The only git ref allowed to assume the push role (least-privilege — not '*').
+  GitHubOwnerId:
+    Type: String
+    Default: "59924790"
+    Description: >-
+      GitHub numeric owner id (github.com/somoore). Stable, rename-proof identity used in the OIDC
+      trust instead of the mutable `sub` string. Find via: gh api repos/OWNER/REPO --jq .owner.id
+  GitHubRepoId:
+    Type: String
+    Default: "1303487311"
+    Description: >-
+      GitHub numeric repository id (somoore/pairputer). Find via: gh api repos/OWNER/REPO --jq .id
   McpRepoName:
     Type: String
     Default: pairputer-mcp
@@ -68,9 +79,16 @@ Resources:
               StringEquals:
                 # audience must be sts (GitHub sets this when the workflow requests the token)
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Defense-in-depth: also require the STABLE numeric ids (rename-proof, exact).
+                token.actions.githubusercontent.com:repository_owner_id: !Ref GitHubOwnerId
+                token.actions.githubusercontent.com:repository_id: !Ref GitHubRepoId
               StringLike:
-                # subject locked to this repo + ref ONLY
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}/${GitHubRepo}:ref:${GitHubRef}"
+                # IAM REQUIRES a sub- (or job_workflow_ref-) scoped condition, so we must match `sub`.
+                # This account emits sub with numeric suffixes: repo:<org>@<ownerId>/<repo>@<repoId>:...
+                # so the plain "repo:org/repo:ref:..." never matched (the "Not authorized" failure).
+                # Anchor on the exact numeric prefix + ref; wildcard tail keeps us robust to trailing
+                # claim-format details. The numeric-id StringEquals conditions above are the real lock.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:${GitHubRef}*"
       Policies:
         - PolicyName: EcrPublicPushScoped
           PolicyDocument:

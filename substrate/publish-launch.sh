@@ -103,9 +103,14 @@ if [[ "${PUBLIC_READ}" == "true" ]]; then
 EOF
 )
 else
-  # Allow GetObject only when the call flows through CloudFormation (any account).
-  # Verified: blocks anonymous/browser GET (403); permits CloudFormation to read the
-  # root AND nested templateURLs AND the DOOM build-context zip during create-stack.
+  # Reads ONLY via the CloudFormation service — NOTHING else. The ONLY Allow on this bucket grants
+  # s3:GetObject exclusively when the call flows through CloudFormation (aws:CalledVia); with S3
+  # Block-Public-Access ON and no other Allow, everything else is denied by default (no Allow = deny).
+  # A public-access-block + single-conditional-Allow is the AWS-recommended shape here; an explicit
+  # Deny with NotPrincipal was considered and REJECTED — that combination is error-prone (AWS warns
+  # against NotPrincipal+Deny) and adds no real protection over the implicit deny while risking a
+  # policy that locks out CloudFormation itself. Verified below: anonymous/browser/CLI GET -> 403;
+  # CloudFormation create-stack reads the root + nested templateURLs + the DOOM build-context zip.
   POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
