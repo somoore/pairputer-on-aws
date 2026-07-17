@@ -1,0 +1,151 @@
+# Capability manifest — the contract from interaction.md, first real instance.
+# This file is what makes agent-doom an AGENT-INTERACTIVE capsule (Tier 1 + Tier 2).
+# A capsule without this file (e.g. hellbox-doom) is Tier 0: stream-only, agent-inert.
+#
+# The pairputer MCP server reads this (from SSM per-capsule via tag-discovery, or the
+# PAIRPUTER_CAPSULE_MANIFEST env for the bundled capsule) and registers the agent tools.
+# Tool `name` here is a BARE VERB (observe/act/reset_episode). The PLATFORM owns the final
+# tool name: it prefixes each verb with this capsule's id -> `agent_doom__observe`. That
+# guarantees unique, consistent names across N capsules and stops any capsule from picking a
+# colliding or off-brand name. (MCP hosts restrict names to [a-zA-Z0-9_-]; the id's dashes
+# become underscores.)
+capsule:
+  id: agent-doom
+  name: Agent DOOM (RESTful-DOOM)
+  description: >-
+    DOOM with an in-process protobuf/gRPC agent bridge (somoore/restful-doom). The human plays via the
+    live stream; the agent observes structured game state and acts through typed tools — same live game.
+  interaction:
+    tier1: true                 # accepts universal primitives (keys/pointer/read_screen)
+    agentInteractDefault: false # agent may observe by default; acting requires the human to invite it
+  # The agent bridge: an HTTP/1.1 JSON shim on :6905 inside the VM, reached through the
+  # MicroVM's authenticated :443 proxy gateway (X-aws-proxy-auth / X-aws-proxy-port).
+  # It fronts the in-process gRPC DoomAgent service (proto/restfuldoom/v1/agent.proto),
+  # which stays loopback-only. gRPC/h2 is not proxyable through the gateway; the proto
+  # remains the engine contract, the shim is transport adaptation only.
+  bridge:
+    port: 6905
+    protocol: http-json
+  experience:
+    humanHelpText: >-
+      Agent Doom understands goal-style prompts. Try: "beat this level", "find an enemy and punch it, no
+      ammo", "race to the exit without killing anything", "clear this room", or "stop and let me take over".
+    suggestedPrompts:
+      - beat this level
+      - race to the exit without killing anything
+      - find an enemy and punch it, no ammo
+      - clear this room safely
+      - stop and let me take over
+    statusTemplate: >-
+      Goal: {objective}. Phase: {phase}. Kills: {kills}. Ammo delta: {ammo_delta}.
+    capabilities:
+      - free_form_goals
+      - constraint_aware_control
+      - map_aware_navigation
+      - door_and_switch_memory
+      - combat_fsm
+      - triggered_vision_sensor
+  # Tier 2 — per-capsule typed tools. The MCP server registers these GENERICALLY (no capsule-specific
+  # code in the platform): it forwards {args} to the capsule bridge at `path`, which maps it to the
+  # capsule's own gRPC/API. `name` is a BARE VERB; the platform namespaces it to `agent_doom__<verb>`.
+  # `label` (optional) is the human-readable "theatre of work" line shown while the agent acts.
+  tools:
+    - name: observe            # -> registered as agent_doom__observe
+      path: /observe            # bridge route -> DoomAgent gRPC Observe
+      label: reading the game state
+      description: >-
+        Compact live state: player, navigation, combat, kills, and nearby enemies. Use full=true only for
+        diagnostics.
+      requiresApproval: false
+    - name: act                # -> agent_doom__act
+      path: /act                # -> GameSession
+      label: acting in the game
+      description: >-
+        Manual fallback. Prefer drive_goal. Payload {"action":"ACTION_FORWARD","amount":20}. Actions:
+        ACTION_FORWARD, ACTION_BACKWARD, ACTION_TURN_LEFT, ACTION_TURN_RIGHT, ACTION_STRAFE_LEFT,
+        ACTION_STRAFE_RIGHT, ACTION_SHOOT, ACTION_USE, ACTION_SWITCH_WEAPON. To shoot 3 times, call 3 times.
+      requiresApproval: false
+    - name: drive_objective    # -> agent_doom__drive_objective
+      path: /brain/drive
+      label: driving an objective
+      timeoutSeconds: 90
+      description: >-
+        Legacy objective driver. Prefer drive_goal for user prompts. Runs BrainPolicy/SkillController plus
+        the map-aware planner/FSM; returns compact status, steps, delta, and state.
+      requiresApproval: false
+    - name: drive_ticks        # -> agent_doom__drive_ticks
+      path: /brain/drive_ticks
+      label: driving a tic-bounded objective
+      timeoutSeconds: 90
+      description: >-
+        Tic-bounded eval driver. Give objective and max_tics. Returns compact status, steps/tics, delta,
+        and state; never raw map geometry.
+      requiresApproval: false
+    - name: drive_goal         # -> agent_doom__drive_goal
+      path: /brain/drive_goal
+      label: driving a Doom goal
+      timeoutSeconds: 120
+      description: >-
+        Primary natural-language DOOM control — the tool for gameplay prompts ("fight demons",
+        "reach the exit") on a running DOOM; NEVER play_capsule for these. Args: goal + optional
+        objective enum. Async: {status:driving, committed_contract}; wait:true = sync, stop_reason.
+      requiresApproval: false
+    - name: autopilot          # -> agent_doom__autopilot
+      path: /autopilot
+      label: toggling idle assist
+      description: >-
+        Turn idle-assist autopilot on or off. When ON (default), if the human stops
+        playing for ~20s the AI auto-takes-over and hunts/fights aggressively until the
+        human moves again (instant handback). Args: {"enabled": false} to disable idle
+        assist (human plays solo), {"enabled": true} to re-enable. Use when the user says
+        "disable idle assist", "turn off autopilot", "let me play alone", or the reverse.
+      requiresApproval: false
+    - name: tactical_status    # -> agent_doom__tactical_status
+      path: /brain/tactical_status
+      label: reading tactical status
+      description: >-
+        One compact Commander status packet: objective, phase, human_active, state, plan, and vision hint.
+        No raw maps, screenshots, traces, or model text.
+      requiresApproval: false
+    - name: brain_status       # -> agent_doom__brain_status
+      path: /brain/status
+      label: reading brain status
+      description: Compact status for the last deterministic objective-drive loop.
+      requiresApproval: false
+    - name: brain_memory       # -> agent_doom__brain_memory
+      path: /brain/memory
+      label: reading objective memory
+      description: Compact AgentMemory summary for the deterministic Agent DOOM controller.
+      requiresApproval: false
+    - name: map_status        # -> agent_doom__map_status
+      path: /brain/map_status
+      label: reading planner map status
+      description: >-
+        Compact debug status for planner/map/door memory. No raw map geometry.
+      requiresApproval: false
+    - name: vision_status     # -> agent_doom__vision_status
+      path: /brain/vision_status
+      label: reading vision sensor status
+      description: >-
+        Compact debug status for triggered vision perception. No screenshots or raw model text.
+      requiresApproval: false
+    - name: reset_episode      # -> agent_doom__reset_episode
+      path: /reset_episode      # -> ResetEpisode
+      label: restarting the episode
+      description: Restart the episode (resets the level for both the human and the agent).
+      requiresApproval: true    # disruptive to the human -> confirm
+    - name: save_snapshot      # -> agent_doom__save_snapshot
+      path: /snapshot/save      # -> SaveSnapshot
+      label: saving a snapshot
+      description: Save the current game state to a named snapshot slot.
+      requiresApproval: false
+    - name: load_snapshot      # -> agent_doom__load_snapshot
+      path: /snapshot/load      # -> LoadSnapshot
+      label: loading a snapshot
+      description: Load a previously saved game snapshot (jumps the live game for both players).
+      requiresApproval: true    # disruptive to the human -> confirm
+  permissions:
+    iamRole: none               # DOOM needs no AWS access; the VM role stays empty (least privilege).
+                                # Runtime logs are shipped by the RELAY (its own role), not the VM.
+  safety:
+    sensitivePatterns: []       # nothing in DOOM touches the real world

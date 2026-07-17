@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  pairputer relay networking. CloudFront VPC origins require the relay ALB to live in
+  PRIVATE subnets (CloudFront reaches it over a private connection, never the public
+  internet), which is what closes the old cleartext CloudFront->ALB hop without any ACM
+  cert or Route53 zone.
+
+  NetworkingMode:
+    ExistingVpc         - use the deployer's VpcId + PrivateSubnetIds as-is (they own egress).
+                          The subnets MUST be private with a working egress path (NAT/endpoints).
+    CreateVpcFckNat     - create a dedicated VPC + public/private subnets + a fck-nat instance (~$3/mo).
+    CreateVpcNatGateway - same dedicated VPC, but a managed NAT Gateway (~$32/mo).
+
+Parameters:
+  NetworkingMode:
+    Type: String
+    AllowedValues: [ExistingVpc, CreateVpcFckNat, CreateVpcNatGateway]
+  VpcId:
+    Type: String
+    Default: ""
+    Description: Existing VPC (ExistingVpc mode only).
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Existing PRIVATE subnets with egress (ExistingVpc mode only).
+  VpcCidr:
+    Type: String
+    Default: ""
+    Description: CIDR of the existing VPC (ExistingVpc mode only); resolved by deploy.sh.
+  FckNatAmiId:
+    Type: String
+    Default: ""
+    Description: fck-nat ARM64 AMI id (resolved by deploy.sh). Required for CreateVpcFckNat.
+  NewVpcCidr:
+    Type: String
+    Default: 10.71.0.0/16
+    Description: CIDR for the newly created VPC (Create* modes only).
+
+Conditions:
+  CreateVpc: !Not [!Equals [!Ref NetworkingMode, ExistingVpc]]
+  UseFckNat: !Equals [!Ref NetworkingMode, CreateVpcFckNat]
+  UseNatGateway: !Equals [!Ref NetworkingMode, CreateVpcNatGateway]
+  UseExisting: !Equals [!Ref NetworkingMode, ExistingVpc]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Condition: CreateVpc
+    Properties:
+      CidrBlock: !Ref NewVpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: CreateVpc
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref NewVpcCidr, 6, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-a" }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref NewVpcCidr, 6, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-public-b" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateVpc
+    Properties: { VpcId: !Ref Vpc }
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateVpc
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetA }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetB }
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [4, !Cidr [!Ref NewVpcCidr, 6, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-a" }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: CreateVpc
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [5, !Cidr [!Ref NewVpcCidr, 6, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-private-b" }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateVpc
+    Properties: { VpcId: !Ref Vpc }
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: { RouteTableId: !Ref PrivateRouteTable, SubnetId: !Ref PrivateSubnetA }
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateVpc
+    Properties: { RouteTableId: !Ref PrivateRouteTable, SubnetId: !Ref PrivateSubnetB }
+
+  # --- egress: managed NAT Gateway (CreateVpcNatGateway) -------------------------------------------
+  NatEip:
+    Type: AWS::EC2::EIP
+    Condition: UseNatGateway
+    Properties: { Domain: vpc }
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: UseNatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnetA
+  PrivateNatRoute:
+    Type: AWS::EC2::Route
+    Condition: UseNatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # --- egress: fck-nat instance (CreateVpcFckNat) --------------------------------------------------
+  # A t4g.nano NAT instance (~$3/mo) instead of a managed NAT Gateway (~$32/mo). fck-nat's AL2023 AMI
+  # forwards traffic and binds its ENI/EIP on boot; SourceDestCheck must be false on the ENI.
+  FckNatEip:
+    Type: AWS::EC2::EIP
+    Condition: UseFckNat
+    Properties: { Domain: vpc }
+
+  FckNatSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseFckNat
+    Properties:
+      GroupDescription: fck-nat instance ingress from within the VPC
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: !Ref NewVpcCidr
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FckNatRole:
+    Type: AWS::IAM::Role
+    Condition: UseFckNat
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FckNatEni
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:AttachNetworkInterface
+                  - ec2:ModifyNetworkInterfaceAttribute
+                  - ec2:AssociateAddress
+                  - ec2:DisassociateAddress
+                Resource: "*"
+  FckNatInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: UseFckNat
+    Properties: { Roles: [!Ref FckNatRole] }
+
+  FckNatEni:
+    Type: AWS::EC2::NetworkInterface
+    Condition: UseFckNat
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      GroupSet: [!Ref FckNatSecurityGroup]
+      SourceDestCheck: false
+      Description: !Sub "${AWS::StackName} fck-nat"
+
+  FckNatInstance:
+    Type: AWS::EC2::Instance
+    Condition: UseFckNat
+    Properties:
+      InstanceType: t4g.nano
+      ImageId: !Ref FckNatAmiId
+      IamInstanceProfile: !Ref FckNatInstanceProfile
+      NetworkInterfaces:
+        - NetworkInterfaceId: !Ref FckNatEni
+          DeviceIndex: 0
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # fck-nat reads /etc/fck-nat.conf; bind the pre-allocated EIP so egress IP is stable.
+          echo "eip_id=${FckNatEip.AllocationId}" >> /etc/fck-nat.conf
+          echo "eni_id=${FckNatEni}" >> /etc/fck-nat.conf
+          service fck-nat restart || systemctl restart fck-nat || true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-fck-nat" }]
+
+  FckNatPrivateRoute:
+    Type: AWS::EC2::Route
+    Condition: UseFckNat
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NetworkInterfaceId: !Ref FckNatEni
+
+Outputs:
+  ResolvedVpcId:
+    Value: !If [CreateVpc, !Ref Vpc, !Ref VpcId]
+  ResolvedVpcCidr:
+    Value: !If [CreateVpc, !Ref NewVpcCidr, !Ref VpcCidr]
+  ResolvedPrivateSubnetIds:
+    Value: !If
+      - UseExisting
+      - !Join [",", !Ref PrivateSubnetIds]
+      - !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]

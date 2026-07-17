@@ -1,0 +1,843 @@
+capsule:
+  id: computer-use-desktop
+  name: Pairputer Workbench
+  description: >-
+    A persistent, streamed Linux workstation shared by a human and an agent. It provides a confined
+    workspace, visible browser/editor/terminal/file manager, typed semantic services, verified task
+    execution, human-first control epochs, and durable freeze/thaw reconciliation.
+  interaction:
+    # Substrate-wide raw Tier-1 mutation stays disabled. Physical fallback is
+    # exposed below as one capsule-bound, exact-consent, epoch-checked tool.
+    tier1: false
+    # Autonomy posture: the VM is disposable (human pauses/trashes anytime), so the
+    # agent may act by default. The AUTHORITATIVE gate is policy.py (PAIRPUTER_WORKBENCH_
+    # AUTONOMY): in-VM effects run free; only external-world commits still require approval.
+    agentInteractDefault: true
+  bridge:
+    port: 6905
+    protocol: http-json
+  lifecycle:
+    beforeFreeze: /lifecycle/pre-freeze
+    afterThaw: /lifecycle/post-thaw
+  runtime:
+    minimumMemoryMiB: 8192
+    localDockerSeccompProfile: chromium-namespaces-v1
+    # Root desktopd creates a private mount namespace for uid job and installs
+    # owner-based firewall rules. Local Docker grants only these two narrowly
+    # declared capabilities; the AWS image already uses AdditionalOsCapabilities.
+    localDockerCapabilities: [NET_ADMIN, SYS_ADMIN]
+    logicalDisplay:
+      width: 1440
+      height: 900
+      fallbackWidth: 1280
+      fallbackHeight: 800
+  experience:
+    humanHelpText: >-
+      A disposable, resumable computer that you and whichever frontier AI you prefer can operate
+      together. It ships git, gh, uv (Python), node/npm, gcc, ripgrep, neovim, and VS Code in the
+      browser (code-server at http://localhost:4500). Ask the agent to scaffold or fix a project, run
+      and verify it, or open VS Code / the browser. Your git identity, SSH keys, editor settings, and
+      ~/projects live under workspace/persistent/ and survive a trashed VM. Moving the mouse or typing
+      immediately pauses agent work.
+    suggestedPrompts:
+      - Inspect this workspace, fix the failing test, and show me verified evidence.
+      - Create a small Python project, run it, and leave the browser open on the result.
+      - Continue the current authorized task, but stop before any external submission.
+    capabilities:
+      - durable_task_contracts
+      - confined_workspace
+      - chunked_file_ingress
+      - tracked_visible_processes
+      - browser_cdp_semantics
+      - task_scoped_browser_network
+      - opt_in_local_preview
+      - atspi_accessibility
+      - exact_consent_physical_input
+      - human_epoch_preemption
+      - verified_evidence
+      - freeze_thaw_reconciliation
+    display:
+      logicalWidth: 1440
+      logicalHeight: 900
+      encodedWidth: 1440
+      encodedHeight: 900
+      deviceScale: 1
+      rotation: 0
+  tools:
+    - name: observe
+      path: /observe
+      label: observing the workstation
+      description: >-
+        Return a bounded fused desktop, control, and task snapshot. More tools than advertised exist
+        (windows/apps/UI-tree, jobs, extra workspace + browser ops) — list them with capsule_metadata
+        and call them with capsule_invoke.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        properties:
+          include_windows: {type: boolean, default: true}
+          include_browser: {type: boolean, default: true}
+          include_accessibility: {type: boolean, default: false}
+          task_id: {type: string, minLength: 1, maxLength: 128}
+          workspace_path: {type: string, maxLength: 4096}
+          limit: {type: integer, minimum: 1, maximum: 500}
+        additionalProperties: false
+    - name: screenshot
+      path: /screenshot
+      label: capturing current workstation pixels
+      description: >-
+        See the desktop: capture the current screen and return it as an INLINE IMAGE (plus the PNG/raw-pixel
+        digests). Call it bare — {} — to see the whole screen; no envelope needed. A frontier host's
+        computer-use loop can screenshot, then act via computer_action, then screenshot again to verify.
+        (The pixel digest can still bind an exact-consent physical_input to the same target if you use that
+        stricter path; for open computer-use you don't need it.)
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: []
+        properties:
+          x: {type: integer, minimum: 0, maximum: 1439, default: 0}
+          y: {type: integer, minimum: 0, maximum: 899, default: 0}
+          width: {type: integer, minimum: 1, maximum: 1440}
+          height: {type: integer, minimum: 1, maximum: 900}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: physical_input
+      advertise: false
+      path: /input
+      label: visibly moving the pointer or typing on the workstation
+      description: >-
+        Exact-consent physical pointer/keyboard fallback on the shared desktop. Every batch is bound to
+        this capsule, this tenant, a single-use action digest, and a fresh raw-pixel digest of the intended
+        target; the guest input arbiter rejects changed targets, stale human epochs/revisions, and input
+        outside the approved crop. Human input immediately preempts and releases held agent inputs. Do not
+        use this fallback for credentials or other secrets.
+      requiresApproval: true
+      approvalPolicy: exact_action_single_use
+      effects: [external_commit]
+      riskClass: external_commit
+      interruptibility: interruptible
+      idempotency: never_blindly_retry
+      inputSchema:
+        type: object
+        required: [events, target_proof, expected_human_epoch, expected_world_revision]
+        properties:
+          expected_human_epoch:
+            type: integer
+            minimum: 0
+            description: Exact humanEpoch returned by the screenshot that produced target_proof.
+          expected_world_revision:
+            type: integer
+            minimum: 0
+            description: Exact worldRevision returned by the screenshot that produced target_proof.
+          target_proof:
+            type: object
+            description: >-
+              Exact targetProof returned by a current screenshot of the intended target. Keyboard events
+              additionally require the non-null focused-window identity and geometry in this proof.
+            required: [x, y, width, height, pixel_sha256, focused_window]
+            properties:
+              x: {type: integer, minimum: 0, maximum: 1439}
+              y: {type: integer, minimum: 0, maximum: 899}
+              width: {type: integer, minimum: 1, maximum: 1440}
+              height: {type: integer, minimum: 1, maximum: 900}
+              pixel_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+              focused_window:
+                oneOf:
+                  - type: object
+                    required: [window_id, x, y, width, height]
+                    properties:
+                      window_id: {type: integer, minimum: 1}
+                      x: {type: integer}
+                      y: {type: integer}
+                      width: {type: integer, minimum: 1}
+                      height: {type: integer, minimum: 1}
+                    additionalProperties: false
+                  - type: 'null'
+            additionalProperties: false
+          events:
+            type: array
+            minItems: 1
+            maxItems: 32
+            items:
+              oneOf:
+                - type: object
+                  required: [t, x, y]
+                  properties:
+                    t: {const: m}
+                    x: {type: integer, minimum: 0, maximum: 16383}
+                    y: {type: integer, minimum: 0, maximum: 16383}
+                  additionalProperties: false
+                - type: object
+                  required: [t, button, down]
+                  properties:
+                    t: {const: b}
+                    button: {type: integer, minimum: 0, maximum: 7}
+                    down: {type: boolean}
+                  additionalProperties: false
+                - type: object
+                  required: [t, key, down]
+                  properties:
+                    t: {const: k}
+                    key: {type: string, minLength: 1, maxLength: 32}
+                    down: {type: boolean}
+                  additionalProperties: false
+        additionalProperties: false
+    - name: computer_action
+      path: /computer/action
+      label: controlling the shared desktop (computer-use)
+      description: >-
+        OPEN computer-use surface: drive the shared Linux desktop with the standard computer-use action
+        vocabulary — no target proof, no epoch bookkeeping. A frontier host's existing computer-use loop
+        (OpenAI CUA / Anthropic Computer Use) works drop-in: pair it with `screenshot` for pixels and send
+        actions here. Send a single action, or {actions:[...]} for an ordered batch. Supported: click,
+        double_click, right_click, middle_click, move, mouse_down, mouse_up, scroll, type, key, drag, wait.
+        Coordinates are logical desktop pixels (1440x900). The human always wins — any human input preempts
+        instantly and this tool yields during the human-active cooldown. The VM is disposable, so mistakes
+        are cheap. External-world commits (form submit/upload/etc.) are still gated by capsule policy.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: interruptible
+      inputSchema:
+        type: object
+        properties:
+          action: {type: string, description: "click|double_click|right_click|middle_click|move|mouse_down|mouse_up|scroll|type|key|drag|wait|screenshot"}
+          type: {type: string, description: "alias for action (Anthropic shape)"}
+          x: {type: integer, minimum: 0, maximum: 1439}
+          y: {type: integer, minimum: 0, maximum: 899}
+          coordinate: {type: array, items: {type: integer}, minItems: 2, maxItems: 2}
+          text: {type: string, maxLength: 8192}
+          keys: {description: "chord as 'ctrl+s' or ['ctrl','s']"}
+          key: {type: string, maxLength: 64}
+          scroll_x: {type: integer, minimum: -64, maximum: 64}
+          scroll_y: {type: integer, minimum: -64, maximum: 64}
+          scroll_direction: {type: string, enum: [up, down, left, right]}
+          scroll_amount: {type: integer, minimum: 1, maximum: 64}
+          path: {type: array, items: {type: array, items: {type: integer}, minItems: 2, maxItems: 2}}
+          ms: {type: integer, minimum: 0, maximum: 10000}
+          actions:
+            type: array
+            minItems: 1
+            maxItems: 32
+            description: An ordered batch of CUA actions applied in sequence.
+            items: {type: object}
+        additionalProperties: true
+    - name: drive_task
+      path: /brain/drive
+      label: starting a verified desktop task
+      description: >-
+        HEAVYWEIGHT verified-execution engine for multi-step work that needs PROVEN evidence (fix a
+        failing test and show the passing run; complete a workflow with checked postconditions). It
+        requires a strictly-typed plan whose success_predicates are provable by read-only verifier
+        skills — do NOT reach for it to simply create/author a file. To just DROP CODE INTO THE SANDBOX
+        (write a page/script/project and open it), use workspace_write with {path, content} then
+        browser_open on file:///home/app/workspace/<file> or a local preview — one or two calls, no
+        plan, no evidence grammar. Only use drive_task when the human explicitly wants verified,
+        evidence-backed execution. Submit an asynchronous task contract: include a goal and explicit
+        success_predicates; include a typed plan as an ARRAY of steps shaped exactly as {step_id, skill,
+        arguments, success_predicates, evidence_assertions}, or omit plan and poll task_status for a
+        NEEDS_HOST_REASONING packet with the registered skills and verifier paths. Infer the smallest
+        allowed_capabilities set; use only canonical enum values. Success predicates must be positive
+        observable end states; put prohibited actions in constraints/forbidden_effects.
+        Humans should not need to name internal capabilities.
+      # Starting a task is local_reversible and the human can pause/trash anytime; don't gate
+      # the entry point. policy.py still gates any external-world commit the task tries to make.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      timeoutClass: submission
+      inputSchema:
+        type: object
+        required: [goal, success_predicates]
+        properties:
+          goal: {type: string, minLength: 1, maxLength: 12000}
+          constraints: {type: array, items: {type: string}, maxItems: 100}
+          forbidden_effects: {type: array, items: {type: string}, maxItems: 100}
+          success_predicates: {type: array, items: {type: string}, minItems: 1, maxItems: 100}
+          desired_artifacts: {type: array, items: {type: string}, maxItems: 100}
+          allowed_apps: {type: array, items: {type: string}, maxItems: 50}
+          allowed_domains: {type: array, items: {type: string}, maxItems: 100}
+          allowed_capabilities:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              enum: [app.open, browser.navigate, browser.query, browser.interact, process.exec, cross_app.transfer, workspace.write, workspace.read]
+          risk_budget: {type: string, enum: [read_only, local_reversible, local_destructive, external_commit]}
+          autonomy: {type: boolean, description: "Run in-VM effects without per-action approval (default from capsule env). External-world commits still require approval."}
+          presentation_mode: {type: string, enum: [fast, visible, hybrid]}
+          max_steps: {type: integer, minimum: 1, maximum: 10000}
+          plan: {type: array, items: {type: object}, maxItems: 1000}
+          idle_resume_policy: {type: object}
+          conflict: {type: string, enum: [reject, queue, replace]}
+        additionalProperties: false
+    - name: continue_task
+      advertise: false
+      path: /brain/continue
+      label: reconciling and continuing a task
+      description: Continue an existing task with a host plan patch, exact approval token, or explicit resume.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [task_id]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+          plan: {type: array, items: {type: object}, maxItems: 1000}
+          action_approval_token: {type: string, maxLength: 4096}
+          trigger: {type: string, enum: [explicit, idle]}
+          idle_seconds: {type: number, minimum: 0, maximum: 86400}
+        additionalProperties: false
+    - name: task_status
+      path: /brain/status
+      label: reading task status
+      description: Return task progress, needs, bounded events, and verified evidence.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [task_id]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+        additionalProperties: false
+    - name: cancel_task
+      advertise: false
+      path: /brain/cancel
+      label: canceling the desktop task
+      description: Cancel a task idempotently and release agent control.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [task_id]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+        additionalProperties: false
+    - name: approve_action
+      advertise: false
+      path: /brain/approve
+      label: approving one exact pending action
+      description: Human-confirmed, single-use approval for the exact canonical pending action.
+      requiresApproval: true
+      effects: [external_commit]
+      riskClass: external_commit
+      approvalPolicy: exact_action_single_use
+      inputSchema:
+        type: object
+        required: [approval_id]
+        properties:
+          approval_id: {type: string, minLength: 1, maxLength: 256}
+        additionalProperties: false
+    - name: workspace_list
+      advertise: false
+      path: /workspace/list
+      label: listing workspace files
+      description: Bounded no-follow listing inside /home/app/workspace.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema: &path_list_schema
+        type: object
+        properties:
+          path: {type: string, maxLength: 4096, default: .}
+          limit: {type: integer, minimum: 1, maximum: 1000}
+        additionalProperties: false
+    - name: workspace_describe
+      advertise: false
+      path: /workspace/describe
+      label: describing a workspace artifact
+      description: Return bounded metadata and SHA-256 for a confined artifact.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema: &path_schema
+        type: object
+        required: [path]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+        additionalProperties: false
+    - name: workspace_read
+      path: /workspace/read
+      label: reading a workspace artifact
+      description: Read a bounded range with hash/type/truncation metadata.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [path]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          offset: {type: integer, minimum: 0}
+          length: {type: integer, minimum: 0, maximum: 1048576}
+        additionalProperties: false
+    - name: workspace_write
+      path: /workspace/write
+      label: atomically writing a workspace artifact
+      description: >-
+        Drop code/files straight into the sandbox VM — THE way to put a host-generated file (an HTML
+        page, a script, a project source) into the Workbench. JUST WORKS with only {path, content}:
+        the anti-drift envelope (action_id, idempotency_key, expected_human_epoch,
+        expected_world_revision) is OPTIONAL — omit it for a plain unconditional write, and missing
+        parent dirs are auto-created (no separate mkdir). This is the direct, low-ceremony path — prefer
+        it over drive_task for simply authoring a file. To then OPEN a page you wrote, use browser_open
+        on file:///home/app/workspace/<your-file> (the confined workspace is allowed). To REPLACE an
+        existing file safely, pass its current expected_sha256; to keep the exact-consent anti-drift
+        guarantee, pass expected_human_epoch/expected_world_revision from a fresh observe.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      idempotency: stable_key
+      inputSchema: &write_schema
+        type: object
+        required: [path, content]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          content: {type: string, maxLength: 900000}
+          encoding: {type: string, enum: [utf-8, base64], default: utf-8}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+          presentation_mode: {type: string, enum: [fast, visible, hybrid]}
+        additionalProperties: false
+    - name: workspace_mkdir
+      advertise: false
+      path: /workspace/mkdir
+      label: creating a workspace directory
+      description: >-
+        Create a bounded-depth directory tree inside the workspace with no-follow confinement,
+        epoch/revision checks, stable idempotency, and app-readable ownership.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      idempotency: stable_key
+      inputSchema:
+        type: object
+        required: [path]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          parents: {type: boolean, default: true}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+          presentation_mode: {type: string, enum: [fast, visible, hybrid]}
+        additionalProperties: false
+    - name: workspace_upload
+      path: /workspace/upload
+      label: securely uploading a workspace artifact chunk
+      description: >-
+        Transfer a file's bytes INTO the VM (e.g. from the host) as offset- and SHA-bound base64
+        chunks. NOTE: for host->VM transfers up to 8 MB the platform persistent_storage tool is the
+        EASY path (one write call, no chunking, no epoch envelope, durable AND lands live) — use
+        THIS tool for larger files or ephemeral workspace paths. JUST WORKS: (1) the upload auto-commits as soon as the staged bytes reach total_size
+        — you do NOT need to pass final=true (though final=true still forces it); (2) missing parent
+        directories in `path` are auto-created (confined), so no separate mkdir is needed. On commit it
+        verifies the declared total size/SHA and atomically writes under epoch/revision, idempotency,
+        confinement, and replacement-hash checks. Fetch a FRESH expected_world_revision right before
+        each call — an intervening mutation advances the revision and a stale one is rejected. Max 8 MiB;
+        keep each chunk under ~512 KiB raw. For content you can author directly, prefer workspace_write.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      idempotency: stable_key_chunk_offset_hash
+      inputSchema:
+        type: object
+        required: [path, upload_id, offset, chunk_base64, chunk_sha256, total_size, total_sha256]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          upload_id: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$'}
+          offset: {type: integer, minimum: 0, maximum: 8388608}
+          chunk_base64: {type: string, minLength: 1, maxLength: 699052}
+          chunk_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          total_size: {type: integer, minimum: 1, maximum: 8388608}
+          total_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          final: {type: boolean}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+          presentation_mode: {type: string, enum: [fast, visible, hybrid]}
+        additionalProperties: false
+    - name: workspace_patch
+      advertise: false
+      path: /workspace/patch
+      label: atomically patching a workspace artifact
+      description: Apply bounded exact-match hunks only when the expected current SHA and epoch/revision still match.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      idempotency: stable_key_expected_hash
+      inputSchema:
+        type: object
+        required: [path, expected_sha256, hunks]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          hunks:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              type: object
+              required: [old, new]
+              properties:
+                old: {type: string, minLength: 1, maxLength: 400000}
+                new: {type: string, maxLength: 400000}
+                count: {type: integer, minimum: 1, maximum: 100, default: 1}
+              additionalProperties: false
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+          presentation_mode: {type: string, enum: [fast, visible, hybrid]}
+        additionalProperties: false
+    - name: workspace_move
+      advertise: false
+      path: /workspace/move
+      label: moving a workspace artifact
+      description: Move an artifact within the confined workspace with expected SHA evidence.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      inputSchema:
+        type: object
+        required: [source, destination, expected_sha256, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          source: {type: string, minLength: 1, maxLength: 4096}
+          destination: {type: string, minLength: 1, maxLength: 4096}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: workspace_trash
+      advertise: false
+      path: /workspace/trash
+      label: moving an artifact to reversible trash
+      description: Reversibly trash an artifact with expected SHA and epoch/revision checks.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      interruptibility: atomic_commit
+      inputSchema:
+        type: object
+        required: [path, expected_sha256, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: run_command
+      path: /process/run
+      label: running a tracked command in the visible terminal
+      description: >-
+        Start a bounded argv-first tracked job. Shell mode must be explicit and authorized. Follow or
+        stop jobs with job_status / cancel_job via capsule_invoke.
+      requiresApproval: true
+      effects: [local_mutation]
+      riskClass: local_destructive
+      inputSchema:
+        type: object
+        required: [action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          argv: {type: array, items: {type: string}, maxItems: 128}
+          shell: {type: string, maxLength: 32768}
+          explicit_shell_mode: {type: boolean}
+          cwd: {type: string, maxLength: 4096, default: .}
+          environment: {type: object}
+          takeover_policy: {type: string, enum: [stop_on_handoff, continue_background]}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        oneOf: [{required: [argv]}, {required: [shell, explicit_shell_mode]}]
+        additionalProperties: false
+    - name: job_status
+      advertise: false
+      path: /process/status
+      label: reading tracked job status
+      description: Return bounded job output and exit state.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [job_id]
+        properties:
+          job_id: {type: string, minLength: 1, maxLength: 128}
+          tail_bytes: {type: integer, minimum: 0, maximum: 262144}
+        additionalProperties: false
+    - name: cancel_job
+      advertise: false
+      path: /process/cancel
+      label: canceling a tracked job
+      description: Stop a tracked process group according to its declared handoff policy.
+      requiresApproval: false
+      approvalPolicy: safety_stop
+      effects: [local_mutation]
+      riskClass: local_destructive
+      inputSchema:
+        type: object
+        required: [job_id, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          job_id: {type: string, minLength: 1, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: list_apps
+      advertise: false
+      path: /apps/list
+      label: listing supported applications
+      description: Return installed/tested applications and semantic capabilities.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema: {type: object, properties: {}, additionalProperties: false}
+    - name: open_app
+      advertise: false
+      path: /apps/open
+      label: opening an application
+      description: Launch or activate an allowlisted desktop application.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [app_id, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          app_id: {type: string, enum: [browser, editor, terminal, files]}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: list_windows
+      advertise: false
+      path: /windows/list
+      label: listing desktop windows
+      description: Return bounded EWMH top-level window descriptors.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema: {type: object, properties: {}, additionalProperties: false}
+    - name: focus_window
+      advertise: false
+      path: /windows/focus
+      label: focusing a desktop window
+      description: Re-resolve and focus a window with epoch/revision checks.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [window_id, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          window_id: {type: string, minLength: 1, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: ui_tree
+      advertise: false
+      path: /accessibility/tree
+      label: reading a bounded accessibility tree
+      description: Query bounded AT-SPI semantics for an allowed app/window.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [app_name]
+        properties:
+          app_name: {type: string, maxLength: 256}
+          role: {type: string, maxLength: 128}
+          name: {type: string, maxLength: 512}
+        additionalProperties: false
+    - name: ground_target
+      path: /accessibility/ground
+      label: finding the on-screen element that matches an intent
+      description: >-
+        Ground a natural-language target to a SHORT, ranked list of on-screen elements instead of reading
+        the whole accessibility tree or guessing a selector/coordinate. Pass an intent like "click the Save
+        button" or "the search box"; get back the top candidates, each with a stable `mark`, name, role,
+        and score. Then act on the chosen element by its name/role (ui_action) or use its bounds for a
+        visible click. Deterministic, fast, and far more reliable than grounding blind — prefer this over
+        dumping ui_tree when you know what you're looking for.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [intent]
+        properties:
+          intent: {type: string, minLength: 1, maxLength: 512}
+          app_name: {type: string, maxLength: 256}
+          role: {type: string, maxLength: 128}
+          name: {type: string, maxLength: 512}
+          top_k: {type: integer, minimum: 1, maximum: 50, default: 12}
+        additionalProperties: false
+    - name: ui_action
+      advertise: false
+      path: /accessibility/action
+      label: operating an accessible control
+      description: Perform an exact advertised AT-SPI action with a freshly resolved target and commit checks.
+      requiresApproval: true
+      effects: [external_commit]
+      riskClass: external_commit
+      inputSchema:
+        type: object
+        required: [app_name, role, name, operation, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          app_name: {type: string, maxLength: 256}
+          role: {type: string, maxLength: 128}
+          name: {type: string, maxLength: 512}
+          operation: {type: string, minLength: 1, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: browser_open
+      path: /browser/open
+      label: opening a website in visible Chromium
+      description: >-
+        Navigate visible Chromium to a URL. To OPEN A PAGE YOU AUTHORED in the sandbox, pass
+        file:///home/app/workspace/<your-file> (the confined workspace subtree is allowed; arbitrary
+        file:// and private/SSRF hosts stay blocked). Also works for http(s):// and http://localhost:<port>
+        local previews. Deeper browser tools (browser_observe, browser_action) are callable via
+        capsule_invoke.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [task_id, url, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+          url: {type: string, minLength: 1, maxLength: 8192}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: browser_observe
+      advertise: false
+      path: /browser/observe
+      label: observing visible Chromium
+      description: Return bounded tab and DOM/accessibility semantic state.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [task_id]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+        additionalProperties: false
+    - name: browser_query
+      path: /browser/query
+      label: reading visible Chromium semantically
+      description: Read bounded, untrusted semantic text from one selector on a task-policy-approved visible page; never returns form values, clicks, fills, navigates, or submits.
+      requiresApproval: false
+      effects: [read]
+      riskClass: read_only
+      inputSchema:
+        type: object
+        required: [task_id, tab_id, selector]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+          tab_id: {type: string, minLength: 1, maxLength: 256}
+          selector: {type: string, minLength: 1, maxLength: 2048}
+        additionalProperties: false
+    - name: browser_action
+      advertise: false
+      path: /browser/action
+      label: operating visible Chromium semantically
+      description: Execute a typed browser query/fill/click action; consequential commits require dynamic policy approval.
+      requiresApproval: true
+      effects: [external_commit]
+      riskClass: external_commit
+      inputSchema:
+        type: object
+        required: [task_id, tab_id, browser_action, selector, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          task_id: {type: string, minLength: 1, maxLength: 128}
+          tab_id: {type: string, minLength: 1, maxLength: 256}
+          browser_action: {type: string, enum: [query, click, fill]}
+          url: {type: string, maxLength: 4096}
+          selector: {type: string, minLength: 1, maxLength: 4096}
+          value: {type: string, maxLength: 1048576}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+    - name: export_artifact
+      advertise: false
+      path: /artifacts/export
+      label: exporting a verified artifact
+      description: Register a hash-bound confined artifact by canonical path, type, size, and SHA-256.
+      requiresApproval: false
+      effects: [local_mutation]
+      riskClass: local_reversible
+      inputSchema:
+        type: object
+        required: [path, expected_sha256, action_id, idempotency_key, expected_human_epoch, expected_world_revision]
+        properties:
+          path: {type: string, minLength: 1, maxLength: 4096}
+          expected_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+          task_id: {type: string, maxLength: 128}
+          step_id: {type: string, maxLength: 128}
+          action_id: {type: string, minLength: 1, maxLength: 128}
+          idempotency_key: {type: string, minLength: 1, maxLength: 256}
+          expected_human_epoch: {type: integer, minimum: 0}
+          expected_world_revision: {type: integer, minimum: 0}
+        additionalProperties: false
+  permissions:
+    iamRole: none
+  safety:
+    sensitivePatterns:
+      - '(?i)(password|passwd|secret|api[_-]?key|authorization|bearer)\s*[:=]'
+      - 'AKIA[0-9A-Z]{16}'
+      - '-----BEGIN [A-Z ]*PRIVATE KEY-----'

@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Pairputer Workbench — live view + agent cursor</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0f;font:13px/1.4 system-ui,sans-serif;color:#e7e7ea;overflow:hidden}
+  #stage{position:relative;width:100vw;height:100vh}
+  /* noVNC iframe shows the REAL desktop + real cursor */
+  #vnc{position:absolute;inset:0;width:100%;height:100%;border:0}
+  /* transparent overlay layer on top of the video — draws attribution, never blocks it */
+  #ov{position:absolute;inset:0;pointer-events:none;z-index:5}
+  /* the agent cursor halo + label, tracking the REAL cursor position from :6906 */
+  #agent{position:absolute;display:none;transform:translate(-50%,-50%);z-index:6;
+         width:34px;height:34px;border-radius:50%;
+         border:2px solid #8ab4ff;box-shadow:0 0 14px 3px rgba(138,180,255,.55);
+         transition:left .06s linear, top .06s linear}
+  #agent::after{content:"🤖 Agent";position:absolute;top:38px;left:50%;transform:translateX(-50%);
+         white-space:nowrap;font-size:11px;font-weight:600;color:#8ab4ff;
+         background:rgba(12,16,28,.85);padding:2px 8px;border-radius:6px;border:1px solid #33507f}
+  /* click ripple at the real cursor on each accepted agent input */
+  .ripple{position:absolute;transform:translate(-50%,-50%);z-index:6;width:14px;height:14px;border-radius:50%;
+         border:2px solid #8ab4ff;animation:rip .5s ease-out forwards;pointer-events:none}
+  @keyframes rip{from{opacity:.9;width:8px;height:8px}to{opacity:0;width:56px;height:56px}}
+  /* owner badge */
+  #owner{position:absolute;top:10px;left:10px;z-index:7;padding:4px 10px;border-radius:8px;
+         font-weight:600;background:rgba(12,16,28,.85);border:1px solid #34343e}
+  #owner.agent{color:#8ab4ff;border-color:#33507f}
+  #owner.human{color:#7fe0a0;border-color:#2f6b4a}
+  #owner.idle{color:#9a9aa5}
+  #hint{position:absolute;bottom:10px;left:10px;z-index:7;color:#6b6b76;font-size:11px}
+</style>
+</head>
+<body>
+<div id="stage">
+  <!-- The real desktop via noVNC. Change the host/port if you mapped different ones. -->
+  <iframe id="vnc" src="http://127.0.0.1:6901/vnc_app.html?autoconnect=1&resize=scale&reconnect=1&show_dot=false"></iframe>
+  <div id="ov">
+    <div id="agent"></div>
+  </div>
+  <div id="owner" class="idle">● idle</div>
+  <div id="hint">agent cursor tracks the real pointer via :6906 · noVNC shows the live desktop</div>
+</div>
+<script>
+// The overlay is TRUTHFUL: it draws where the REAL cursor is (reported by the input service on
+// :6906), not a second fake cursor. So it can never drift from where clicks actually land.
+const STATE_URL = "http://127.0.0.1:6906/";
+const agent = document.getElementById("agent");
+const owner = document.getElementById("owner");
+const stage = document.getElementById("stage");
+let lastReceiptSeq = null, logical = {w:1440, h:900};
+
+// map a logical desktop coordinate onto the letterboxed video rect inside the stage.
+// noVNC with resize=scale fits the framebuffer into the iframe preserving aspect, centered.
+function toScreen(lx, ly){
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const scale = Math.min(sw/logical.w, sh/logical.h);
+  const vw = logical.w*scale, vh = logical.h*scale;
+  const ox = (sw-vw)/2, oy = (sh-vh)/2;
+  return { x: ox + lx*scale, y: oy + ly*scale };
+}
+
+function ripple(lx, ly){
+  const p = toScreen(lx, ly);
+  const r = document.createElement("div");
+  r.className = "ripple"; r.style.left = p.x+"px"; r.style.top = p.y+"px";
+  document.getElementById("ov").appendChild(r);
+  setTimeout(()=>r.remove(), 520);
+}
+
+async function tick(){
+  try{
+    const s = await (await fetch(STATE_URL, {cache:"no-store"})).json();
+    if (s.display){ logical = {w:s.display.logicalWidth||1440, h:s.display.logicalHeight||900}; }
+    // owner badge
+    const o = s.owner || "idle";
+    owner.className = o; owner.textContent = "● " + o;
+    // draw the agent cursor at the live pointer position (only while the AGENT owns control,
+    // so the human's own pointer isn't shadowed by a halo)
+    const lx = s.cursorX, ly = s.cursorY;
+    if (o === "agent" && Number.isFinite(lx) && Number.isFinite(ly)){
+      const p = toScreen(lx, ly);
+      agent.style.display = "block"; agent.style.left = p.x+"px"; agent.style.top = p.y+"px";
+    } else {
+      agent.style.display = "none";
+    }
+    // ripple on each newly-accepted agent input
+    const rc = s.lastReceipt;
+    if (rc && rc.accepted && rc.sequence !== lastReceiptSeq && o === "agent"){
+      lastReceiptSeq = rc.sequence;
+      if (Number.isFinite(rc.actualCursorX)) ripple(rc.actualCursorX, rc.actualCursorY);
+    }
+  }catch(e){ /* state endpoint momentarily unavailable during restart; keep polling */ }
+  setTimeout(tick, 100);  // 10 Hz — smooth enough with the CSS transition, cheap
+}
+tick();
+</script>
+</body>
+</html>

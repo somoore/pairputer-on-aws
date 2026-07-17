@@ -1,0 +1,4 @@
+mcp==1.28.1
+boto3==1.43.45
+cryptography==49.0.0
+PyYAML==6.0.3

@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  pairputer CI supply-chain stack. Deploy ONCE in the account that owns the public images. Creates:
+  the GitHub Actions OIDC provider, a least-privilege push role assumable ONLY by this repo's main
+  branch, and the two public ECR repos (immutable tags). GitHub Actions assumes the role via OIDC —
+  no long-lived AWS keys are ever stored in GitHub. cosign keyless signing uses the same OIDC token.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: pairputer
+  GitHubRepo:
+    Type: String
+    Default: pairputer-platform
+  GitHubRef:
+    Type: String
+    Default: refs/heads/main
+    Description: The only git ref allowed to assume the push role (least-privilege — not '*').
+  McpRepoName:
+    Type: String
+    Default: pairputer-mcp
+  RelayRepoName:
+    Type: String
+    Default: pairputer-stateful-relay
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create the GitHub OIDC provider (set false if the account already has one).
+
+Conditions:
+  # Only create the OIDC provider if the account doesn't already have one (they're account-global).
+  # Default true; set CreateOidcProvider=false if a GitHub OIDC provider already exists.
+  ShouldCreateOidc: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # AWS validates GitHub's OIDC via its trusted CAs; the thumbprint is no longer load-bearing,
+      # but the field is still required by the resource. This is GitHub's well-known intermediate.
+      ThumbprintList:
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  # Least-privilege push role. Trust is scoped to EXACTLY this repo + ref (no wildcards, no pull_request,
+  # no other branch). Permissions are limited to pushing to the two named public ECR repos.
+  CiPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-push"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOidc
+                - !Ref GitHubOidcProvider
+                - !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                # audience must be sts (GitHub sets this when the workflow requests the token)
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # subject locked to this repo + ref ONLY
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}/${GitHubRepo}:ref:${GitHubRef}"
+      Policies:
+        - PolicyName: EcrPublicPushScoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Push layers/manifests to ONLY the two named public repos (+ cosign signature/attestation
+              # artifacts, which live in the same repos). No wildcard repo access.
+              - Sid: PushToNamedPublicRepos
+                Effect: Allow
+                Action:
+                  - ecr-public:BatchCheckLayerAvailability
+                  - ecr-public:InitiateLayerUpload
+                  - ecr-public:UploadLayerPart
+                  - ecr-public:CompleteLayerUpload
+                  - ecr-public:PutImage
+                  - ecr-public:DescribeImages
+                  - ecr-public:DescribeRepositories
+                  - ecr-public:BatchDeleteImage
+                Resource:
+                  - !GetAtt McpRepo.Arn
+                  - !GetAtt RelayRepo.Arn
+              # GetAuthorizationToken + the STS-token read for public ECR cannot be resource-scoped
+              # (AWS requires "*"); they are read-only auth calls, not push. This is the minimum AWS allows.
+              - Sid: PublicEcrAuth
+                Effect: Allow
+                Action:
+                  - ecr-public:GetAuthorizationToken
+                  - sts:GetServiceBearerToken
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: us-east-1   # ECR Public control plane is us-east-1 only
+
+  McpRepo:
+    Type: AWS::ECR::PublicRepository
+    Properties:
+      RepositoryName: !Ref McpRepoName
+
+  RelayRepo:
+    Type: AWS::ECR::PublicRepository
+    Properties:
+      RepositoryName: !Ref RelayRepoName
+
+Outputs:
+  PushRoleArn:
+    Description: Role for GitHub Actions to assume via OIDC (role-to-assume in the workflow).
+    Value: !GetAtt CiPushRole.Arn
+  McpRepoUri:
+    Description: Public ECR URI for the MCP server image (the registry alias appears once created).
+    Value: !Sub "public.ecr.aws/<alias>/${McpRepoName}  (see 'aws ecr-public describe-registries' for alias)"
+  RelayRepoName:
+    Value: !Ref RelayRepoName
+  McpRepoName:
+    Value: !Ref McpRepoName

@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer security primitives shared by AgentCore and the relay.
+
+Resources:
+  RelaySessionSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-relay-session-secret"
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  RelayOriginHeaderSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-relay-origin-header-secret"
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  CloudFrontSigningPrivateKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}-cloudfront-signing-private-key"
+      Description: Private key used by AgentCore to sign short-lived CloudFront relay URLs.
+      SecretString: unset
+
+  SigningKeyCustomResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SigningKeyCustomResource
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:PutSecretValue]
+                Resource: !Ref CloudFrontSigningPrivateKeySecret
+
+  SigningKeyCustomResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt SigningKeyCustomResourceRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          const https=require("https"),crypto=require("crypto"),{SecretsManagerClient,GetSecretValueCommand,PutSecretValueCommand}=require("@aws-sdk/client-secrets-manager"),sm=new SecretsManagerClient({});
+          exports.handler=async(e,c)=>{let id=e.PhysicalResourceId||"PairputerCfSigningKey";try{if(e.RequestType==="Delete")return r(e,c,"SUCCESS",{},id);let s=e.ResourceProperties.SecretId,p="";try{p=(await sm.send(new GetSecretValueCommand({SecretId:s}))).SecretString||""}catch{}let pub;if(!p.includes("PRIVATE KEY")){let k=crypto.generateKeyPairSync("rsa",{modulusLength:2048,publicKeyEncoding:{type:"spki",format:"pem"},privateKeyEncoding:{type:"pkcs8",format:"pem"}});p=k.privateKey;pub=k.publicKey;await sm.send(new PutSecretValueCommand({SecretId:s,SecretString:p}))}else pub=crypto.createPublicKey(p).export({type:"spki",format:"pem"});await r(e,c,"SUCCESS",{PublicKeyPem:pub},id)}catch(x){await r(e,c,"FAILED",{Error:String(x.stack||x)},id)}};
+          function r(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},x=>{x.on("data",()=>{});x.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  SigningKeyMaterial:
+    Type: Custom::PairputerCloudFrontSigningKey
+    Properties:
+      ServiceToken: !GetAtt SigningKeyCustomResourceFunction.Arn
+      SecretId: !Ref CloudFrontSigningPrivateKeySecret
+
+  CloudFrontSigningPublicKey:
+    Type: AWS::CloudFront::PublicKey
+    Properties:
+      PublicKeyConfig:
+        CallerReference: !Sub "${AWS::StackName}-cloudfront-signing-key"
+        Name: !Sub "${AWS::StackName}-cloudfront-signing-key"
+        Comment: pairputer relay signed URL public key
+        EncodedKey: !GetAtt SigningKeyMaterial.PublicKeyPem
+
+  CloudFrontSigningKeyGroup:
+    Type: AWS::CloudFront::KeyGroup
+    Properties:
+      KeyGroupConfig:
+        Name: !Sub "${AWS::StackName}-cloudfront-key-group"
+        Comment: pairputer relay signed URL key group
+        Items:
+          - !Ref CloudFrontSigningPublicKey
+
+Outputs:
+  RelaySessionSecretArn:
+    Value: !Ref RelaySessionSecret
+  RelayOriginHeaderSecretArn:
+    Value: !Ref RelayOriginHeaderSecret
+  CloudFrontSigningPrivateKeySecretArn:
+    Value: !Ref CloudFrontSigningPrivateKeySecret
+  CloudFrontPublicKeyId:
+    Value: !Ref CloudFrontSigningPublicKey
+  CloudFrontKeyGroupId:
+    Value: !Ref CloudFrontSigningKeyGroup

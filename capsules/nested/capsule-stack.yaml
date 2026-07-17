@@ -1,0 +1,516 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer capsule stack — builds ONE capsule MicroVM image and tags it for MCP tag-based discovery. Deploy AFTER the substrate; each capsule is its own stack (a cartridge).
+
+Parameters:
+  CapsuleContextUri:
+    Type: String
+    Description: S3 URI for the capsule MicroVM build context zip.
+    AllowedPattern: '^s3://[^\s]+$'
+  CapsuleContextBucket:
+    Type: String
+    Description: S3 bucket containing CapsuleContextUri.
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+  CapsuleContextSha256:
+    Type: String
+    Default: ""
+    Description: SHA-256 hex digest of the exact staged capsule build context.
+    AllowedPattern: '^$|^[a-f0-9]{64}$'
+  CapsuleImageName:
+    Type: String
+    Default: pairputer-capsule
+    Description: Account-local Lambda MicroVM image name.
+    AllowedPattern: '^[a-zA-Z0-9-_]{1,64}$'
+  CapsuleBaseImageArn:
+    Type: String
+    Default: ""
+    Description: Optional managed base image ARN. Leave empty for the regional al2023-1 base image.
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:lambda:[a-z0-9-]+:aws:microvm-image:[a-zA-Z0-9-_]+$'
+  CapsuleBaseImageVersion:
+    Type: String
+    Default: "0"
+    Description: Managed base image version used by AWS::Lambda::MicrovmImage.
+    AllowedPattern: '^[^\s]+$'
+  CapsuleMinMemoryMiB:
+    Type: Number
+    Default: 2048
+    MinValue: 2048
+    MaxValue: 32768
+    Description: Minimum memory for each capsule MicroVM.
+  PairputerDebug:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Bake PAIRPUTER_DEBUG into the image so the capsule emits verbose input diagnostics.
+  InputSelftestEnforce:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: When true, a failed input self-test fails the image build instead of shipping a capsule where input does not work.
+  # --- Capsule identity + manifest, tagged onto the image for MCP tag-based discovery ----------------
+  CapsuleId:
+    Type: String
+    Description: Stable capsule id the MCP uses (e.g. "doom", "agent-doom"). Namespaces its Tier 2 tools.
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+  CapsuleDisplayName:
+    Type: String
+    Default: ""
+    Description: Human-readable capsule name shown by list_capsules.
+  CapsuleDescription:
+    Type: String
+    Default: ""
+    Description: One-line capsule description shown by list_capsules.
+  MemoryTierOf:
+    Type: String
+    Default: ""
+    Description: >-
+      If set, this image is a MEMORY-TIER sibling of the named base capsule (not a standalone
+      capsule): the MCP folds it into the base's memoryTiers and hides it from list_capsules.
+      Deploy a 16 GB workbench with MemoryTierOf=computer-use-desktop and MemoryMib=16384.
+  MemoryMib:
+    Type: String
+    Default: ""
+    Description: This tier's memory size in MiB (must match CapsuleMinMemoryMiB); only used with MemoryTierOf.
+  CapsuleManifestSsmParam:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^/pairputer/capsules/[a-z0-9][a-z0-9-]{0,62}/manifests/sha256-[a-f0-9]{64}$'
+    Description: >-
+      Optional SSM Parameter name holding the capsule's capability manifest JSON (interaction.md). The MCP
+      reads it at runtime to register the capsule's agent tools, so a manifest change needs no control-plane
+      redeploy. Empty = Tier 0 (stream-only, agent-inert).
+  CapsuleManifestDigest:
+    Type: String
+    Default: ""
+    Description: SHA-256 of the exact UTF-8 bytes stored in CapsuleManifestSsmParam.
+    AllowedPattern: '^$|^sha256:[a-f0-9]{64}$'
+  CapsuleReleaseSsmParam:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^/pairputer/capsules/[a-z0-9][a-z0-9-]{0,62}/current$'
+    Description: >-
+      SSM Parameter name of the capsule's atomic current-release pointer. The pointer names an immutable
+      release record that pins one manifest digest to one ACTIVE MicroVM image version. Empty is accepted
+      only for legacy/Tier-0 capsules; release-aware runtimes fail closed for new launches without it.
+
+Rules:
+  CapsuleReleaseMetadataIsComplete:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref CapsuleManifestSsmParam, ""]]
+          - !And
+            - !Equals [!Ref CapsuleManifestDigest, ""]
+            - !Equals [!Ref CapsuleReleaseSsmParam, ""]
+        AssertDescription: Tier-0 capsules must omit all release metadata together.
+      - Assert: !Or
+          - !Equals [!Ref CapsuleManifestSsmParam, ""]
+          - !And
+            - !Not [!Equals [!Ref CapsuleManifestDigest, ""]]
+            - !Not [!Equals [!Ref CapsuleReleaseSsmParam, ""]]
+            - !Not [!Equals [!Ref CapsuleContextSha256, ""]]
+        AssertDescription: A manifest requires its digest, current-release pointer, and context digest.
+
+Conditions:
+  UseDefaultBaseImageArn: !Equals [!Ref CapsuleBaseImageArn, ""]
+  PublishCapsuleRelease: !Not [!Equals [!Ref CapsuleManifestSsmParam, ""]]
+
+Resources:
+  MicrovmImageLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/microvms/${AWS::StackName}/${CapsuleImageName}"
+      RetentionInDays: 14
+
+  MicrovmImageBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: PairputerMicrovmImageBuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadBuildContext
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${CapsuleContextBucket}/*"
+              - Sid: WriteBuildLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${MicrovmImageLogGroup.Arn}:*"
+              - Sid: DescribeLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+
+  CapsuleMicrovmImage:
+    Type: AWS::Lambda::MicrovmImage
+    Properties:
+      Name: !Ref CapsuleImageName
+      Description: !Sub "pairputer capsule MicroVM image (${CapsuleId})."
+      BaseImageArn: !If
+        - UseDefaultBaseImageArn
+        - !Sub "arn:aws:lambda:${AWS::Region}:aws:microvm-image:al2023-1"
+        - !Ref CapsuleBaseImageArn
+      BaseImageVersion: !Ref CapsuleBaseImageVersion
+      BuildRoleArn: !GetAtt MicrovmImageBuildRole.Arn
+      CodeArtifact:
+        Uri: !Ref CapsuleContextUri
+      AdditionalOsCapabilities:
+        - ALL
+      CpuConfigurations:
+        - Architecture: ARM_64
+      EgressNetworkConnectors:
+        - !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+      EnvironmentVariables:
+        - Key: PAIRPUTER_CAPSULE
+          Value: !Ref CapsuleId
+        - Key: PAIRPUTER_DEBUG
+          Value: !Ref PairputerDebug
+        - Key: PAIRPUTER_INPUT_SELFTEST_ENFORCE
+          Value: !Ref InputSelftestEnforce
+      Hooks:
+        Port: 9000
+        MicrovmImageHooks:
+          Ready: ENABLED
+          # 600s starved the workbench once its image crossed ~5.1GB: a converted MicroVM image has
+          # substantially colder first-touch I/O than local Docker (boot is a lazy-load page-fault
+          # storm — Xvnc sat in wchan=folio_wait_bit_common), and the brew-baked build missed the
+          # 10-minute ready hook twice while every smaller rollback build passed. The budget is a
+          # ceiling, not a delay: a fast boot still completes in ~1 minute.
+          ReadyTimeoutInSeconds: 1800
+          Validate: DISABLED
+          ValidateTimeoutInSeconds: 60
+        MicrovmHooks:
+          Run: ENABLED
+          RunTimeoutInSeconds: 60
+          Resume: ENABLED
+          ResumeTimeoutInSeconds: 60
+          Suspend: DISABLED
+          SuspendTimeoutInSeconds: 60
+          Terminate: DISABLED
+          TerminateTimeoutInSeconds: 60
+      Logging:
+        CloudWatch:
+          LogGroup: !Ref MicrovmImageLogGroup
+      Resources:
+        - MinimumMemoryInMiB: !Ref CapsuleMinMemoryMiB
+      # Discovery namespace: the MCP list_capsules queries images by `pairputer:capsule=true` and reads
+      # the rest to list/describe ONLY pairputer capsules — never MicroVM images made outside pairputer.
+      Tags:
+        - Key: Project
+          Value: pairputer
+        - Key: Component
+          Value: CapsuleMicrovmImage
+        - Key: pairputer:capsule
+          Value: "true"
+        - Key: pairputer:capsule-id
+          Value: !Ref CapsuleId
+        - Key: pairputer:capsule-name
+          Value: !Ref CapsuleDisplayName
+        - Key: pairputer:capsule-description
+          Value: !Ref CapsuleDescription
+        - Key: pairputer:capsule-manifest-ssm
+          Value: !Ref CapsuleManifestSsmParam
+        - Key: pairputer:capsule-release-ssm
+          Value: !Ref CapsuleReleaseSsmParam
+        # Empty on a standalone capsule; set on a memory-tier sibling to fold it into its base.
+        - Key: pairputer:capsule-memory-tier-of
+          Value: !Ref MemoryTierOf
+        - Key: pairputer:capsule-memory-mib
+          Value: !Ref MemoryMib
+
+  # --- Immutable capsule release publication --------------------------------------------------------
+  # The image resource does not complete until LatestActiveImageVersion exists. This custom resource is
+  # therefore CloudFormation-serialized after the matching image build, validates the exact immutable
+  # manifest bytes, creates an immutable release record, and advances `current` as its final write. On a
+  # failed update CloudFormation invokes the old properties during rollback, restoring the old pointer.
+  CapsuleReleasePublisherRole:
+    Type: AWS::IAM::Role
+    Condition: PublishCapsuleRelease
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PairputerCapsuleReleasePublisher
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:PutParameter, ssm:AddTagsToResource]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pairputer/capsules/${CapsuleId}/*"
+
+  CapsuleReleasePublisherFunction:
+    Type: AWS::Lambda::Function
+    Condition: PublishCapsuleRelease
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt CapsuleReleasePublisherRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import hashlib, json, urllib.request, boto3
+          from botocore.exceptions import ClientError
+          def canonical(value):
+              return json.dumps(value, separators=(",", ":"), sort_keys=True)
+          def digest(value):
+              return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+          def send(event, context, status, data, physical_id):
+              body = json.dumps({"Status": status, "Reason": data.get("Error", "ok")[:1000],
+                  "PhysicalResourceId": physical_id, "StackId": event["StackId"],
+                  "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
+                  "NoEcho": False, "Data": data}).encode()
+              req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT",
+                  headers={"content-type": "", "content-length": str(len(body))})
+              urllib.request.urlopen(req, timeout=20)
+          def immutable_put(ssm, name, value, capsule_id):
+              try:
+                  old = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+                  if old != value:
+                      raise ValueError("immutable SSM collision at " + name)
+                  return
+              except ClientError as exc:
+                  if exc.response.get("Error", {}).get("Code") != "ParameterNotFound":
+                      raise
+              try:
+                  ssm.put_parameter(Name=name, Type="String", Tier="Intelligent-Tiering", Value=value,
+                      Overwrite=False, Tags=[{"Key":"pairputer:capsule","Value":"true"},
+                          {"Key":"pairputer:capsule-id","Value":capsule_id},
+                          {"Key":"pairputer:immutable","Value":"true"}])
+              except ClientError as exc:
+                  if exc.response.get("Error", {}).get("Code") != "ParameterAlreadyExists":
+                      raise
+                  old = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+                  if old != value:
+                      raise ValueError("immutable SSM collision at " + name)
+          def handler(event, context):
+              p = event.get("ResourceProperties", {})
+              capsule_id = p.get("CapsuleId", "")
+              physical_id = event.get("PhysicalResourceId") or ("PairputerCapsuleRelease:" + capsule_id)
+              try:
+                  if event.get("RequestType") == "Delete":
+                      return send(event, context, "SUCCESS", {"Deleted": "metadata retained"}, physical_id)
+                  manifest_parameter = p["ManifestParameter"]
+                  manifest_digest = p["ManifestDigest"]
+                  current_parameter = p["CurrentParameter"]
+                  expected_prefix = "/pairputer/capsules/" + capsule_id + "/"
+                  if current_parameter != expected_prefix + "current":
+                      raise ValueError("current release parameter is outside the capsule namespace")
+                  if not manifest_parameter.startswith(expected_prefix + "manifests/sha256-"):
+                      raise ValueError("manifest parameter is not immutable/content-addressed")
+                  if manifest_parameter.rsplit("sha256-", 1)[-1] != manifest_digest.removeprefix("sha256:"):
+                      raise ValueError("manifest parameter path does not match its declared digest")
+                  ssm = boto3.client("ssm")
+                  manifest_value = ssm.get_parameter(Name=manifest_parameter)["Parameter"]["Value"]
+                  if digest(manifest_value) != manifest_digest:
+                      raise ValueError("manifest digest mismatch; current pointer was not changed")
+                  release = {"schemaVersion":1, "capsuleId":capsule_id,
+                      "imageArn":p["ImageArn"], "imageVersion":str(p["ImageVersion"]),
+                      "manifestParameter":manifest_parameter, "manifestDigest":manifest_digest,
+                      "contextSha256":p["ContextSha256"], "contextUri":p["ContextUri"]}
+                  release_digest = digest(canonical(release))
+                  release["releaseDigest"] = release_digest
+                  release_value = canonical(release)
+                  release_parameter = ("/pairputer/capsules/" + capsule_id + "/releases/sha256-" +
+                      release_digest.removeprefix("sha256:"))
+                  immutable_put(ssm, release_parameter, release_value, capsule_id)
+                  current_value = canonical({"schemaVersion":1, "capsuleId":capsule_id,
+                      "releaseParameter":release_parameter, "releaseDigest":release_digest})
+                  # The one mutable write is last. Readers observe a complete old or new pointer.
+                  try:
+                      ssm.get_parameter(Name=current_parameter)
+                      ssm.put_parameter(Name=current_parameter, Type="String", Tier="Intelligent-Tiering",
+                          Value=current_value, Overwrite=True)
+                  except ClientError as exc:
+                      if exc.response.get("Error", {}).get("Code") != "ParameterNotFound":
+                          raise
+                      ssm.put_parameter(Name=current_parameter, Type="String", Tier="Intelligent-Tiering",
+                          Value=current_value, Overwrite=False, Tags=[
+                              {"Key":"pairputer:capsule","Value":"true"},
+                              {"Key":"pairputer:capsule-id","Value":capsule_id}])
+                  send(event, context, "SUCCESS", {"ReleaseDigest":release_digest,
+                      "ReleaseParameter":release_parameter, "ImageVersion":str(p["ImageVersion"])}, physical_id)
+              except Exception as exc:
+                  send(event, context, "FAILED", {"Error":str(exc)}, physical_id)
+
+  CapsuleReleasePublisher:
+    Type: Custom::PairputerCapsuleRelease
+    Condition: PublishCapsuleRelease
+    Properties:
+      ServiceToken: !GetAtt CapsuleReleasePublisherFunction.Arn
+      CapsuleId: !Ref CapsuleId
+      ImageArn: !GetAtt CapsuleMicrovmImage.ImageArn
+      ImageVersion: !GetAtt CapsuleMicrovmImage.LatestActiveImageVersion
+      ManifestParameter: !Ref CapsuleManifestSsmParam
+      ManifestDigest: !Ref CapsuleManifestDigest
+      CurrentParameter: !Ref CapsuleReleaseSsmParam
+      ContextSha256: !Ref CapsuleContextSha256
+      ContextUri: !Ref CapsuleContextUri
+
+  # --- Foolproof teardown: terminate MicroVMs before the image is deleted ---------------------------
+  # A running/suspended MicroVM pins its image, so `DeleteMicrovmImage` fails with an opaque
+  # GeneralServiceException and the whole stack delete gets stuck. This custom resource terminates every
+  # MicroVM on the image on stack DELETE, waits for TERMINATED, THEN lets CloudFormation delete the image.
+  # It DependsOn the image so, on delete, the reaper runs FIRST (CFN deletes in reverse dependency order).
+  MicrovmReaperRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PairputerMicrovmReaper
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              # List + terminate MicroVMs on THIS image, and delete the image itself, scoped to this
+              # account's microvm-image ARN. DeleteMicrovmImage lets the reaper delete the image (with
+              # retries on the transient GeneralServiceException) BEFORE CloudFormation's native delete —
+              # so a console-only user, who never runs remove-cf.sh, gets an unstuck teardown too.
+              - Effect: Allow
+                Action:
+                  - lambda:ListMicrovms
+                  - lambda:TerminateMicrovm
+                  - lambda:GetMicrovm
+                  - lambda:DeleteMicrovmImage
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${CapsuleImageName}"
+
+  MicrovmReaperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt MicrovmReaperRole.Arn
+      Timeout: 300
+      Environment:
+        Variables:
+          IMAGE_ARN: !GetAtt CapsuleMicrovmImage.ImageArn
+      Code:
+        ZipFile: |
+          import json, time, urllib.request, boto3
+          from botocore.exceptions import ClientError
+          def _send(e, ctx, status, reason):
+              body = json.dumps({"Status": status, "Reason": reason[:1000],
+                  "PhysicalResourceId": e.get("PhysicalResourceId", "pairputer-microvm-reaper"),
+                  "StackId": e["StackId"], "RequestId": e["RequestId"],
+                  "LogicalResourceId": e["LogicalResourceId"], "Data": {}}).encode()
+              req = urllib.request.Request(e["ResponseURL"], data=body, method="PUT",
+                  headers={"content-type": "", "content-length": str(len(body))})
+              urllib.request.urlopen(req, timeout=30)
+          def handler(event, context):
+              try:
+                  # Only Delete needs reaping; Create/Update are no-ops that must still signal SUCCESS.
+                  if event["RequestType"] != "Delete":
+                      return _send(event, context, "SUCCESS", "no-op")
+                  import os
+                  arn = os.environ["IMAGE_ARN"]
+                  c = boto3.client("lambda-microvms")
+                  # terminate every non-terminated MicroVM on this image
+                  vms = c.list_microvms(imageIdentifier=arn).get("items", [])
+                  for vm in vms:
+                      if vm.get("state") != "TERMINATED":
+                          try: c.terminate_microvm(microvmIdentifier=vm["microvmId"])
+                          except Exception as ex: print("terminate", vm.get("microvmId"), ex)
+                  # wait until all are TERMINATED (image delete is blocked until then)
+                  for _ in range(40):
+                      left = [v for v in c.list_microvms(imageIdentifier=arn).get("items", [])
+                              if v.get("state") != "TERMINATED"]
+                      if not left: break
+                      if context.get_remaining_time_in_millis() < 60000: break
+                      time.sleep(6)
+                  # Delete the image HERE, with retries, so it's already gone before CloudFormation's own
+                  # native DeleteMicrovmImage runs (which does NOT retry the transient GeneralServiceException
+                  # that flakes even with no VM pinning the image). CFN then no-ops on the already-deleted
+                  # image. This is what unsticks teardown for a CONSOLE user who never runs remove-cf.sh.
+                  deleted = False
+                  for _ in range(6):
+                      if context.get_remaining_time_in_millis() < 25000: break
+                      try:
+                          c.delete_microvm_image(imageIdentifier=arn)
+                          deleted = True
+                          break
+                      except ClientError as de:
+                          if de.response.get("Error", {}).get("Code", "") in ("ResourceNotFoundException", "NotFoundException"):
+                              deleted = True  # already gone
+                              break
+                          print("delete_microvm_image retry:", de)
+                          time.sleep(8)
+                      except Exception as de:
+                          print("delete_microvm_image retry:", de)
+                          time.sleep(8)
+                  _send(event, context, "SUCCESS",
+                        f"reaped MicroVMs and {'deleted' if deleted else 'best-effort (CFN will retry)'} image {arn}")
+              except Exception as exc:
+                  # Never block teardown on the reaper — SUCCESS so the stack delete proceeds. If a VM
+                  # genuinely lingers, the image delete surfaces it, but that's rare vs. the common case.
+                  print("reaper error:", exc)
+                  try: _send(event, context, "SUCCESS", f"reaper best-effort (error: {exc})")
+                  except Exception as se: print("send failed:", se)
+
+  MicrovmReaper:
+    Type: Custom::PairputerMicrovmReaper
+    # DependsOn the image => on stack DELETE this runs BEFORE the image is deleted (reverse order),
+    # terminating the MicroVMs that would otherwise block DeleteMicrovmImage.
+    DependsOn: CapsuleMicrovmImage
+    Properties:
+      ServiceToken: !GetAtt MicrovmReaperFunction.Arn
+      ImageArn: !GetAtt CapsuleMicrovmImage.ImageArn
+
+Outputs:
+  CapsuleImageArn:
+    Description: ARN of the generated pairputer capsule MicroVM image.
+    Value: !GetAtt CapsuleMicrovmImage.ImageArn
+  CapsuleImageState:
+    Description: Current state of the generated image resource.
+    Value: !GetAtt CapsuleMicrovmImage.State
+  CapsuleLatestActiveVersion:
+    Description: Exact ACTIVE image version to record in the immutable capsule release.
+    Value: !GetAtt CapsuleMicrovmImage.LatestActiveImageVersion
+  CapsuleReleaseSsmParameter:
+    Description: Atomic current-release pointer advertised by this capsule image.
+    Value: !Ref CapsuleReleaseSsmParam
+  CapsuleReleaseDigest:
+    Condition: PublishCapsuleRelease
+    Description: Digest of the immutable release atomically committed by this stack update.
+    Value: !GetAtt CapsuleReleasePublisher.ReleaseDigest
+  CapsuleReleaseParameter:
+    Condition: PublishCapsuleRelease
+    Description: Immutable SSM release record atomically committed by this stack update.
+    Value: !GetAtt CapsuleReleasePublisher.ReleaseParameter
+  CapsuleImageBuildRoleArn:
+    Description: IAM build role Lambda assumes while building the MicroVM image.
+    Value: !GetAtt MicrovmImageBuildRole.Arn
+  CapsuleImageLogGroupName:
+    Description: CloudWatch log group for MicroVM image build logs.
+    Value: !Ref MicrovmImageLogGroup

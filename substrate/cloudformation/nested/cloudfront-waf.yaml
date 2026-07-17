@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer CloudFront-scope AWS WAF WebACL for the relay front door.
+
+Parameters:
+  RateLimitPerFiveMinutes:
+    Type: Number
+    Default: 2000000
+    MinValue: 10000
+    MaxValue: 2000000000
+    Description: Coarse per-IP abuse ceiling; relay tokens and per-session limits provide precise enforcement without penalizing corporate NATs.
+
+Resources:
+  PairputerWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-web-acl"
+      Scope: CLOUDFRONT
+      Description: pairputer CloudFront relay protection
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-web-acl"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: ip-reputation
+            SampledRequestsEnabled: true
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: known-bad-inputs
+            SampledRequestsEnabled: true
+        - Name: AWSManagedRulesAnonymousIpList
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAnonymousIpList
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: anonymous-ip
+            SampledRequestsEnabled: true
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              ExcludedRules:
+                - Name: SizeRestrictions_BODY
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: common-rules
+            SampledRequestsEnabled: true
+        - Name: BlockMissingRelayAuthParams
+          Priority: 4
+          Action:
+            Block: {}
+          Statement:
+            NotStatement:
+              Statement:
+                AndStatement:
+                  Statements:
+                    - ByteMatchStatement:
+                        FieldToMatch:
+                          QueryString: {}
+                        PositionalConstraint: CONTAINS
+                        SearchString: "t="
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                    - ByteMatchStatement:
+                        FieldToMatch:
+                          QueryString: {}
+                        PositionalConstraint: CONTAINS
+                        SearchString: "Policy="
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                    - ByteMatchStatement:
+                        FieldToMatch:
+                          QueryString: {}
+                        PositionalConstraint: CONTAINS
+                        SearchString: "Signature="
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                    - ByteMatchStatement:
+                        FieldToMatch:
+                          QueryString: {}
+                        PositionalConstraint: CONTAINS
+                        SearchString: "Key-Pair-Id="
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: missing-relay-auth-params
+            SampledRequestsEnabled: true
+        - Name: PerIpRateLimit
+          Priority: 10
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPerFiveMinutes
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: per-ip-rate-limit
+            SampledRequestsEnabled: true
+
+Outputs:
+  WebAclArn:
+    Description: CloudFront-scope WAFv2 WebACL ARN attached to the relay distribution.
+    Value: !GetAtt PairputerWebAcl.Arn

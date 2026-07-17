@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "id": "e1m2-beat-level",
+      "goal": "beat the level",
+      "objective": "complete_level",
+      "episode": 1,
+      "map": 2,
+      "skill": 2,
+      "seed": 0,
+      "max_tics": 7000,
+      "reset_episode": true,
+      "tags": ["generalization", "keys", "doors"]
+    },
+    {
+      "id": "e1m2-no-kill-exit",
+      "goal": "race to the exit without killing anyone",
+      "objective": "exit_level",
+      "constraints": ["no_kills"],
+      "episode": 1,
+      "map": 2,
+      "skill": 2,
+      "seed": 0,
+      "max_tics": 7000,
+      "reset_episode": true,
+      "tags": ["generalization", "keys", "no_kill"]
+    },
+    {
+      "id": "e1m3-beat-level",
+      "goal": "beat the level",
+      "objective": "complete_level",
+      "episode": 1,
+      "map": 3,
+      "skill": 2,
+      "seed": 0,
+      "max_tics": 8000,
+      "reset_episode": true,
+      "tags": ["generalization", "pinky", "lifts"]
+    },
+    {
+      "id": "e1m3-punch-enemy",
+      "goal": "find an enemy and punch it, no ammo",
+      "objective": "kill_enemy",
+      "constraints": ["no_ammo", "fist_only"],
+      "episode": 1,
+      "map": 3,
+      "skill": 2,
+      "seed": 0,
+      "max_tics": 2200,
+      "reset_episode": true,
+      "tags": ["generalization", "melee", "pinky"]
+    }
+  ]
+}

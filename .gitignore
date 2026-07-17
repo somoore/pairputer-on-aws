@@ -1,0 +1,59 @@
+.DS_Store
+.claude/
+*.log
+__pycache__/
+.pytest_cache/
+*.pyc
+node_modules/
+substrate/.artifacts/
+capsules/agent-doom/vision_bench/models/
+capsules/agent-doom/vision_bench/events/
+capsules/agent-doom/vision_bench/corpora/
+capsules/agent-doom/vision_bench/results/
+capsules/agent-doom/vision_bench/*.jsonl
+capsules/agent-doom/vision_bench/*report*.json
+capsules/agent-doom/eval-results/
+*.gguf
+*.gguf.part
+# eval_runner default output paths are repo-root-relative; running it from
+# inside capsules/agent-doom creates this wrongly-nested duplicate tree.
+capsules/agent-doom/capsules/
+
+# Scott's ~/.gitignore_global excludes "CLAUDE.md" (no-slash + macOS case-insensitive),
+# which swallows ANY claude.md at any depth. We WANT the root CLAUDE.md ignored (internal,
+# not shipped publicly), but the host doc docs/hosts/claude.md must stay tracked — so scope
+# the re-include to that one path only, rather than a blanket !CLAUDE.md.
+!docs/hosts/claude.md
+
+# --- Internal docs: kept locally, not shipped in the public repo -----------------------------
+# Working notes, migration/cost/vision memos, blog drafts, and deep-internal design docs. These
+# reference live infra details (account ids, deployment history) and are deliberately private.
+/AGENTS.md
+/blog.md
+/blog2.md
+/blog3.md
+/blog4.md
+/blog5.md
+/cost.md
+/dream.md
+/interaction.md
+/MIGRATION.md
+/platform.md
+/VISION.md
+/docs/aws-account-split.md
+/docs/aws-support-ecr-verification.md
+/docs/data-path-osi.md
+/docs/deployment-history.md
+/docs/live-qa-2026-07-12.md
+/docs/local-dev-loop.md
+/docs/mcp-tool-efficiency.md
+/docs/org-migration.md
+/docs/persistent-workspace.md
+/docs/ROADMAP.md
+/docs/shared-computer-experience.md
+/docs/walls-and-lessons.md
+/docs/workbench-and-substrate-audit-2026-07-12.md
+/docs/adr/
+
+# GitHub Actions workflows — temporarily withheld from the public repo (re-add later).
+/.github/

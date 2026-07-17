@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  pairputer Private-mode image copier. Created ONLY when ImageSource=Private and at least one private image
+  URI was left blank. For each such image it: (1) cosign-verifies pairputer's signed public digest (offline,
+  pinned Sigstore root), then (2) crane-copies it into a private ECR repo in the deployer's account, and
+  returns the resulting private @sha256 digest. The native AWS::BedrockAgentCore::Runtime and the relay
+  ECS task then consume those private digests. Public mode never instantiates this stack.
+
+Parameters:
+  CopyMcp:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Description: Copy the public MCP image into private ECR.
+  CopyRelay:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Description: Copy the public relay image into private ECR.
+  PublicMcpUri:
+    Type: String
+    Description: pairputer's signed public MCP image digest (source when CopyMcp=true).
+  PublicRelayUri:
+    Type: String
+    Description: pairputer's signed public relay image digest (source when CopyRelay=true).
+  SignerIdentityRegexp:
+    Type: String
+    # Images are re-published + keyless-signed by the publish-images workflow in Pairputer/pairputer-internal.
+    Default: '^https://github.com/Pairputer/pairputer-internal/.github/workflows/.*@refs/heads/main$'
+    Description: cosign identity the public images must be signed under (verified before copy).
+  RepoNamePrefix:
+    Type: String
+    Default: pairputer
+    # ECR repo names must be lowercase (regex: [a-z0-9]+((.|_|-)[a-z0-9]+)*(/...)*). The auto-generated
+    # nested-stack name has uppercase (e.g. pairputer-ImageCopyStack-XXX) which ECR rejects, so the root
+    # passes a lowercase, deterministic prefix here instead of us using AWS::StackName.
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{0,40}$'
+
+Conditions:
+  DoMcp: !Equals [!Ref CopyMcp, "true"]
+  DoRelay: !Equals [!Ref CopyRelay, "true"]
+
+Resources:
+  # Private destination repos — only the ones we actually copy into.
+  McpPrivateRepo:
+    Type: AWS::ECR::Repository
+    Condition: DoMcp
+    Properties:
+      RepositoryName: !Sub "${RepoNamePrefix}-private/mcp"
+      ImageTagMutability: IMMUTABLE
+      EmptyOnDelete: true
+
+  RelayPrivateRepo:
+    Type: AWS::ECR::Repository
+    Condition: DoRelay
+    Properties:
+      RepositoryName: !Sub "${RepoNamePrefix}-private/relay"
+      ImageTagMutability: IMMUTABLE
+      EmptyOnDelete: true
+
+  CopierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CopierPushLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*:*"
+              # Push to the private destination repos (scoped to exactly the ones created here).
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  - !If [DoMcp, !GetAtt McpPrivateRepo.Arn, !Ref "AWS::NoValue"]
+                  - !If [DoRelay, !GetAtt RelayPrivateRepo.Arn, !Ref "AWS::NoValue"]
+              # GetAuthorizationToken cannot be resource-scoped (AWS limitation); read-only auth call.
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+
+  CopierProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-image-copier"
+      ServiceRole: !GetAtt CopierRole.Arn
+      Artifacts: { Type: NO_ARTIFACTS }
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - { Name: AWS_ACCOUNT_ID, Value: !Ref "AWS::AccountId" }
+          - { Name: AWS_DEFAULT_REGION, Value: !Ref "AWS::Region" }
+          - { Name: COPY_MCP, Value: !Ref CopyMcp }
+          - { Name: COPY_RELAY, Value: !Ref CopyRelay }
+          - { Name: PUBLIC_MCP_URI, Value: !Ref PublicMcpUri }
+          - { Name: PUBLIC_RELAY_URI, Value: !Ref PublicRelayUri }
+          - { Name: MCP_DEST, Value: !If [DoMcp, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${McpPrivateRepo}", ""] }
+          - { Name: RELAY_DEST, Value: !If [DoRelay, !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RelayPrivateRepo}", ""] }
+          - { Name: SIGNER_IDENTITY_REGEXP, Value: !Ref SignerIdentityRegexp }
+      TimeoutInMinutes: 20
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - set -euo pipefail
+                - echo "installing crane + cosign (arm64)"
+                - curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_arm64.tar.gz | tar -xz -C /usr/local/bin crane
+                - curl -sSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-arm64 && chmod +x /usr/local/bin/cosign
+            build:
+              commands:
+                # ONE command block = one shell. CodeBuild runs each buildspec command in a SEPARATE shell,
+                # so a function defined in one command isn't visible in the next — keep it all together.
+                - |
+                  set -euo pipefail
+                  ISSUER="https://token.actions.githubusercontent.com"
+                  aws ecr get-login-password --region "$AWS_DEFAULT_REGION" \
+                    | crane auth login "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com" --username AWS --password-stdin
+                  # copy_one prints ALL progress to stderr; its ONLY stdout is the final "<dest>@<digest>"
+                  # line, so MCP_RESULT=$(copy_one ...) captures a clean URI (not the progress echoes).
+                  copy_one() {
+                    SRC="$1"; DEST="$2"
+                    echo "verify (cosign) $SRC" >&2
+                    cosign verify --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$SIGNER_IDENTITY_REGEXP" "$SRC" >&2
+                    cosign verify-attestation --type slsaprovenance --certificate-oidc-issuer "$ISSUER" --certificate-identity-regexp "$SIGNER_IDENTITY_REGEXP" "$SRC" >&2
+                    echo "crane copy $SRC -> $DEST:latest" >&2
+                    crane copy "$SRC" "$DEST:latest" >&2
+                    echo "$DEST@$(crane digest "$DEST:latest")"
+                  }
+                  MCP_RESULT=""; RELAY_RESULT=""
+                  if [ "$COPY_MCP" = "true" ]; then MCP_RESULT=$(copy_one "$PUBLIC_MCP_URI" "$MCP_DEST"); fi
+                  if [ "$COPY_RELAY" = "true" ]; then RELAY_RESULT=$(copy_one "$PUBLIC_RELAY_URI" "$RELAY_DEST"); fi
+                  printf '{"McpUri":"%s","RelayUri":"%s"}' "$MCP_RESULT" "$RELAY_RESULT" > /tmp/result.json
+                  cat /tmp/result.json
+
+  # Custom resource: starts the CodeBuild run, waits, and returns the private @sha256 URIs.
+  CopierTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TriggerBuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: !GetAtt CopierProject.Arn
+              # Read back the pushed digest so we can return a @sha256-pinned URI (scoped to our repos).
+              - Effect: Allow
+                Action: ecr:DescribeImages
+                Resource:
+                  - !If [DoMcp, !GetAtt McpPrivateRepo.Arn, !Ref "AWS::NoValue"]
+                  - !If [DoRelay, !GetAtt RelayPrivateRepo.Arn, !Ref "AWS::NoValue"]
+
+  CopierTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt CopierTriggerRole.Arn
+      Timeout: 900
+      Environment:
+        Variables:
+          PROJECT: !Ref CopierProject
+          MCP_REPO: !If [DoMcp, !Ref McpPrivateRepo, ""]
+          RELAY_REPO: !If [DoRelay, !Ref RelayPrivateRepo, ""]
+          REGISTRY: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+      Code:
+        ZipFile: |
+          const https=require("https");
+          const {CodeBuildClient,StartBuildCommand,BatchGetBuildsCommand}=require("@aws-sdk/client-codebuild");
+          const {ECRClient,DescribeImagesCommand}=require("@aws-sdk/client-ecr");
+          const cb=new CodeBuildClient({}); const ecr=new ECRClient({});
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function digestOf(repo){ // digest of the :latest tag we just pushed
+            let r=await ecr.send(new DescribeImagesCommand({repositoryName:repo,imageIds:[{imageTag:"latest"}]}));
+            let d=r.imageDetails&&r.imageDetails[0]&&r.imageDetails[0].imageDigest; if(!d)throw new Error("no digest for "+repo); return d;}
+          exports.handler=async(e,c)=>{let id=e.PhysicalResourceId||"PairputerImageCopy";try{
+            if(e.RequestType==="Delete")return send(e,c,"SUCCESS",{},id);
+            let s=await cb.send(new StartBuildCommand({projectName:process.env.PROJECT}));let bid=s.build.id;
+            for(let i=0;i<80;i++){let g=await cb.send(new BatchGetBuildsCommand({ids:[bid]}));let b=g.builds[0];
+              if(b.buildStatus&&b.buildStatus!=="IN_PROGRESS"){
+                if(b.buildStatus!=="SUCCEEDED")throw new Error("copy build "+b.buildStatus+" (see CodeBuild logs for project "+process.env.PROJECT+")");
+                break;}
+              if(c.getRemainingTimeInMillis()<60000)throw new Error("copy build timed out");
+              await sleep(12000);}
+            let out={},reg=process.env.REGISTRY;
+            if(process.env.MCP_REPO){out.McpUri=reg+"/"+process.env.MCP_REPO+"@"+await digestOf(process.env.MCP_REPO);}
+            if(process.env.RELAY_REPO){out.RelayUri=reg+"/"+process.env.RELAY_REPO+"@"+await digestOf(process.env.RELAY_REPO);}
+            return send(e,c,"SUCCESS",out,bid);
+          }catch(x){return send(e,c,"FAILED",{Error:String(x.stack||x)},id);}};
+          function send(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},r=>{r.on("data",()=>{});r.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  ImageCopy:
+    Type: Custom::PairputerImageCopy
+    Properties:
+      ServiceToken: !GetAtt CopierTriggerFunction.Arn
+      # Re-run the copy if the source digests change.
+      PublicMcpUri: !Ref PublicMcpUri
+      PublicRelayUri: !Ref PublicRelayUri
+
+Outputs:
+  McpPrivateUri:
+    Condition: DoMcp
+    Description: Private-ECR MCP image (verified + copied), digest-pinned.
+    Value: !GetAtt ImageCopy.McpUri
+  RelayPrivateUri:
+    Condition: DoRelay
+    Description: Private-ECR relay image (verified + copied), digest-pinned.
+    Value: !GetAtt ImageCopy.RelayUri

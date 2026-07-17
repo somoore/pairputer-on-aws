@@ -1,0 +1,13 @@
+# NOT build context (the Dockerfile COPYs requirements.txt, app/, wad-source.json,
+# index.html, rootfs/ — everything else here is dev/eval tooling).
+# rsync exclude patterns, consumed by substrate/package-doom-image.sh.
+vision_bench/
+eval-results/
+eval-baselines/
+eval-cases/
+eval-goals/
+eval_runner.py
+eval_gates.py
+goal_fuzz.py
+test_harness.py
+*.md

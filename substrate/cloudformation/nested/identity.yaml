@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer Cognito identity and OAuth clients.
+
+Parameters:
+  CodexCallbackUrl:
+    Type: String
+  CognitoDomainPrefix:
+    Type: String
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+  SuperAdminEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for the first admin user. The template does not create or email a password; see stack outputs for CLI commands.
+    AllowedPattern: '^$|^[^@]+@[^@]+\.[^@]+$'
+
+Conditions:
+  HasSuperAdminEmail: !Not [!Equals [!Ref SuperAdminEmail, ""]]
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-pool"
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      # Cognito's built-in email sender (COGNITO_DEFAULT): zero setup, ~50 emails/day, ideal for the
+      # one-time admin invite. deploy.sh creates the super-admin WITHOUT --message-action SUPPRESS, so
+      # Cognito generates a temporary password, emails it here, and puts the account in
+      # FORCE_CHANGE_PASSWORD — the admin sets their own permanent password on first hosted-UI login.
+      # No password is ever stored in CloudFormation or chosen by the operator.
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: "Your pairputer admin login"
+          # HTML invite. Cognito substitutes {username} + {####} (temp password) ONLY — it cannot inject the
+          # live McpEndpoint/CodexClientId, so those stay as copy-from-Outputs placeholders. The OAuth callback
+          # is now registered in-stack at deploy time (AgentCoreStack CallbackRegistration), so end users need
+          # NO AWS credentials and NO redirect_uri dance — just paste two Output values and log in.
+          EmailMessage: |
+            <div style="margin:0;padding:24px 12px;background:#0b0d12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#e6e9ef;">
+            <div style="max-width:600px;margin:0 auto;background:#12151d;border:1px solid #232838;border-radius:14px;overflow:hidden;">
+            <div style="padding:26px 30px 18px;border-bottom:1px solid #232838;">
+            <div style="font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:#7c5cff;font-weight:700;">pairputer</div>
+            <div style="font-size:22px;font-weight:700;margin-top:6px;color:#fff;">Your admin access is ready</div>
+            <div style="font-size:14px;color:#9aa3b5;margin-top:6px;line-height:1.5;">You deployed pairputer and set <b style="color:#e6e9ef;"><span style="color:#e6e9ef;text-decoration:none;">&#8204;{username}&#8204;</span></b> as the first super-admin. Here's your temporary password, then one connection step so Codex can reach your deployment.</div>
+            </div>
+            <div style="padding:22px 30px 6px;">
+            <div style="background:#0e1118;border:1px solid #232838;border-radius:10px;padding:16px 20px;">
+            <div style="font-size:12px;color:#9aa3b5;text-transform:uppercase;letter-spacing:.08em;">Username</div>
+            <div style="font-size:15px;font-weight:600;margin:4px 0 14px;color:#fff;font-family:ui-monospace,Menlo,monospace;"><span style="color:#fff;text-decoration:none;">&#8204;{username}&#8204;</span></div>
+            <div style="font-size:12px;color:#9aa3b5;text-transform:uppercase;letter-spacing:.08em;">Temporary password</div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px;color:#7c5cff;font-family:ui-monospace,Menlo,monospace;">{####}</div>
+            <div style="font-size:12px;color:#9aa3b5;margin-top:10px;line-height:1.5;">Single-use. You'll set your own permanent password on first login.</div>
+            </div></div>
+            <div style="padding:20px 30px 6px;">
+            <div style="font-size:16px;font-weight:700;color:#fff;">Connect Codex &mdash; one copy-paste, no AWS CLI</div>
+            <div style="font-size:13px;color:#9aa3b5;margin-top:6px;line-height:1.6;">pairputer runs entirely in <b style="color:#e6e9ef;">your own AWS account</b>. The OAuth callback is already registered for you at deploy time, so there's no redirect_uri step &mdash; just point Codex at your endpoint and log in.</div>
+            <div style="background:#0e1118;border:1px solid #232838;border-radius:10px;padding:18px 20px;margin-top:12px;">
+            <div style="font-size:13px;color:#9aa3b5;line-height:1.6;"><b style="color:#e6e9ef;">1.</b> In the AWS console, open your stack in <b style="color:#e6e9ef;">CloudFormation</b>, click the <b style="color:#e6e9ef;">Outputs</b> tab, and find the output whose <b style="color:#e6e9ef;">Key</b> is exactly <code style="color:#c8f7e5;background:#0e1118;padding:1px 5px;border-radius:4px;">CodexConfigToml</code>.</div>
+            <div style="font-size:12px;color:#6b7385;margin-top:6px;line-height:1.6;">Its Value is the whole config block below, but with your <b style="color:#9aa3b5;">real</b> endpoint + client id already filled in &mdash; both public connection info, no secrets.</div>
+            <div style="font-size:13px;color:#9aa3b5;margin-top:12px;line-height:1.6;"><b style="color:#e6e9ef;">2.</b> Copy the <b style="color:#e6e9ef;">Value</b> of that <code style="color:#c8f7e5;">CodexConfigToml</code> output <b style="color:#e6e9ef;">verbatim</b> into <code style="color:#c8f7e5;">~/.codex/config.toml</code>.</div>
+            <div style="background:#241a1a;border:1px solid #5a3535;border-radius:8px;padding:12px 14px;margin-top:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#8a7a7a;line-height:1.55;word-break:break-all;"><div style="font-size:11px;font-weight:700;color:#e08a8a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;font-family:-apple-system,Helvetica,Arial,sans-serif;">&#9888; Shape only &mdash; do NOT copy this. The &hellip; are truncations. Copy the real value from Outputs.</div>[mcp_servers.pairputer]<br>url = "https:&#8204;//bedrock-agentcore&hellip;/invocations?qualifier=DEFAULT"<br>scopes = ["openid", "pairputer-mcp/invoke"]<br>[mcp_servers.pairputer.oauth]<br>client_id = "5qhf&hellip;"</div>
+            <div style="font-size:13px;color:#9aa3b5;margin-top:12px;line-height:1.6;"><b style="color:#e6e9ef;">3.</b> Run <code style="color:#c8f7e5;">codex mcp login pairputer</code> and sign in with the username + temporary password above. That's it &mdash; the callback is already wired.</div>
+            <div style="font-size:12px;color:#6b7385;margin-top:12px;line-height:1.6;">Deployed with <code style="color:#8b93a5;">substrate/deploy.sh</code> instead? Your <code style="color:#8b93a5;">config.toml</code> is already written &mdash; skip to step 3.</div>
+            </div></div>
+            <div style="padding:18px 30px 8px;"><div style="font-size:14px;color:#e6e9ef;line-height:1.6;">&#127918; Once logged in, ask Codex to launch the capsule &mdash; DOOM streams straight into your chat, and you and the model share the same live session.</div></div>
+            <div style="padding:18px 30px 24px;border-top:1px solid #232838;"><div style="font-size:12px;color:#6b7385;line-height:1.6;">You're receiving this because your email was set as the pairputer super-admin during a CloudFormation deploy in your AWS account. If you didn't deploy pairputer, you can ignore this &mdash; the account lives only in your AWS account and no password works until it's changed on first login.</div></div>
+            </div>
+            <div style="max-width:600px;margin:14px auto 0;text-align:center;font-size:11px;color:#4a5165;font-family:-apple-system,Helvetica,Arial,sans-serif;">pairputer &middot; streamed MicroVM capsules for AI chat</div>
+            </div>
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+  ResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      Identifier: pairputer-mcp
+      Name: pairputer MCP API
+      Scopes:
+        - ScopeName: invoke
+          ScopeDescription: Invoke the pairputer MCP server
+
+  SuperAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: SuperAdmins
+      Description: First administrator group for this pairputer deployment.
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref CognitoDomainPrefix
+      ManagedLoginVersion: 1
+
+  CognitoWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-cognito-web-acl"
+      Scope: REGIONAL
+      Description: pairputer Cognito hosted UI protection
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-cognito-web-acl"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: cognito-ip-reputation
+            SampledRequestsEnabled: true
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: cognito-known-bad-inputs
+            SampledRequestsEnabled: true
+        - Name: CognitoPerIpRateLimit
+          Priority: 10
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 300
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: cognito-per-ip-rate-limit
+            SampledRequestsEnabled: true
+
+  CognitoWafAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !GetAtt UserPool.Arn
+      WebACLArn: !GetAtt CognitoWebAcl.Arn
+
+  M2MClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-m2m"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: true
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [client_credentials]
+      AllowedOAuthScopes: ["pairputer-mcp/invoke"]
+      AccessTokenValidity: 24
+      TokenValidityUnits:
+        AccessToken: hours
+
+  CodexClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-codex"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, "pairputer-mcp/invoke"]
+      CallbackURLs: [!Ref CodexCallbackUrl]
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      AccessTokenValidity: 8
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+
+  # One Cognito app client PER HOST (platform.md audit table): same pool, same resource server, one
+  # client_id per chat host so the MCP server can resolve the caller's host profile from the JWT.
+  # ChatGPT's real redirect URI is per-connector-instance (https://chatgpt.com/connector/oauth/<id>,
+  # shown at connector creation) — wire-chatgpt.sh registers it post-deploy, exactly like wire-codex.sh
+  # registers Codex's computed callback. The legacy static URL below keeps the client deployable and
+  # covers already-published apps.
+  ChatGPTClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-chatgpt"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      # ChatGPT's connect flow requests every scope Cognito's discovery advertises (openid email
+      # phone profile); a client that disallows any of them gets an instant invalid_scope bounce
+      # (empirically hit 2026-07-08). Allow the standard OIDC set + our invoke scope.
+      AllowedOAuthScopes: [openid, email, phone, profile, "pairputer-mcp/invoke"]
+      CallbackURLs: ["https://chatgpt.com/connector_platform_oauth_redirect"]
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      AccessTokenValidity: 8
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+
+  # Claude web/desktop/mobile all redirect to fixed, documented URLs — fully static, no post-deploy step.
+  ClaudeClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    Properties:
+      ClientName: !Sub "${AWS::StackName}-claude"
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      # Same wall as ChatGPT (empirically hit 2026-07-09): the host's connect flow requests every
+      # scope Cognito's discovery advertises; disallowing any = instant invalid_scope bounce
+      # ("Authorization with pairputer failed" toast, no login page). Allow the standard OIDC set.
+      AllowedOAuthScopes: [openid, email, phone, profile, "pairputer-mcp/invoke"]
+      CallbackURLs:
+        - "https://claude.ai/api/mcp/auth_callback"
+        - "https://claude.com/api/mcp/auth_callback"
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      AccessTokenValidity: 8
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  M2MClientId:
+    Value: !Ref M2MClient
+  CodexClientId:
+    Value: !Ref CodexClient
+  ChatGPTClientId:
+    Value: !Ref ChatGPTClient
+  ClaudeClientId:
+    Value: !Ref ClaudeClient
+  CognitoDomain:
+    Value: !Sub "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
+  DiscoveryUrl:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/openid-configuration"
+  TokenEndpoint:
+    Value: !Sub "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token"
+  M2MScope:
+    Value: pairputer-mcp/invoke
+  GetSecretCommand:
+    Value: !Sub "aws cognito-idp describe-user-pool-client --user-pool-id ${UserPool} --client-id ${M2MClient} --region ${AWS::Region} --query 'UserPoolClient.ClientSecret' --output text"
+  SuperAdminEmail:
+    Value: !If [HasSuperAdminEmail, !Ref SuperAdminEmail, "not configured"]
+  CreateSuperAdminCommand:
+    Value: !If
+      - HasSuperAdminEmail
+      - !Sub >
+          read -rsp 'Temporary password: ' PAIRPUTER_TEMP_PASSWORD; echo;
+          aws cognito-idp admin-create-user --user-pool-id ${UserPool}
+          --username '${SuperAdminEmail}'
+          --user-attributes Name=email,Value='${SuperAdminEmail}' Name=email_verified,Value=true
+          --temporary-password "$PAIRPUTER_TEMP_PASSWORD"
+          --message-action SUPPRESS
+          --region ${AWS::Region};
+          unset PAIRPUTER_TEMP_PASSWORD
+      - "Set SuperAdminEmail, redeploy, then use this output."
+  CreateSuperAdminWithoutPasswordCommand:
+    Value: !If
+      - HasSuperAdminEmail
+      - !Sub >
+          aws cognito-idp admin-create-user --user-pool-id ${UserPool}
+          --username '${SuperAdminEmail}'
+          --user-attributes Name=email,Value='${SuperAdminEmail}' Name=email_verified,Value=true
+          --message-action SUPPRESS
+          --region ${AWS::Region}
+      - "Set SuperAdminEmail, redeploy, then use this output."
+  SetSuperAdminPermanentPasswordCommand:
+    Value: !If
+      - HasSuperAdminEmail
+      - !Sub >
+          read -rsp 'Permanent password: ' PAIRPUTER_PERMANENT_PASSWORD; echo;
+          aws cognito-idp admin-set-user-password --user-pool-id ${UserPool}
+          --username '${SuperAdminEmail}'
+          --password "$PAIRPUTER_PERMANENT_PASSWORD"
+          --permanent
+          --region ${AWS::Region};
+          unset PAIRPUTER_PERMANENT_PASSWORD
+      - "Set SuperAdminEmail, redeploy, then use this output."
+  AddSuperAdminToGroupCommand:
+    Value: !If
+      - HasSuperAdminEmail
+      - !Sub "aws cognito-idp admin-add-user-to-group --user-pool-id ${UserPool} --username '${SuperAdminEmail}' --group-name ${SuperAdminGroup} --region ${AWS::Region}"
+      - "Set SuperAdminEmail, redeploy, then use this output."
+  LoginInstructions:
+    Value: "Hosted UI self-sign-up is disabled. Create the configured super admin with the stack output command, then run codex mcp login pairputer."
+  CognitoWebAclArn:
+    Value: !GetAtt CognitoWebAcl.Arn

@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "id": "e1m1-find-enemy-fast-100",
+      "goal": "find an enemy",
+      "objective": "find_enemy",
+      "episode": 1,
+      "map": 1,
+      "skill": 2,
+      "seed": 0,
+      "max_tics": 700,
+      "reset_episode": true,
+      "tags": ["reliability", "fast", "100_run", "control"]
+    }
+  ]
+}

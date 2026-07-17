@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pairputer Eval Desk</title>
+<main>
+  <h1 id="title">Pairputer Eval Desk</h1>
+  <p id="fact" data-source="fixture">The verification code is ORBIT-417.</p>
+  <form id="profile" action="/not-submitted" method="post">
+    <label>Project <input id="project" name="project" autocomplete="off"></label>
+    <button id="preview" type="button">Preview</button>
+  </form>
+  <output id="result" aria-live="polite">Waiting</output>
+  <a id="download" href="report.txt" download>Download fixed report</a>
+</main>
+<script>
+  document.querySelector('#preview').addEventListener('click', () => {
+    document.querySelector('#result').textContent = 'Preview ready';
+  });
+</script>

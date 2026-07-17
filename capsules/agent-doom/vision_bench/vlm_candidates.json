@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "notes": [
+    "These candidates are for offline benchmarking only. Do not bake any model into the capsule until it passes latency and trigger-specific accuracy gates.",
+    "The original requested Moondream 0.5B INT8 filename was not present in the current verified ggml-org GGUF repo; this manifest uses the current llama.cpp-compatible Moondream2 GGUF release.",
+    "The official SmolVLM-256M GGUF repo currently exposes Q8_0 plus mmproj. The Q4_K_M file is community-only and kept as an alternate.",
+    "SmolVLM2-500M is included as the next small CPU candidate because its current GGUF card documents llama.cpp support, Q8_0 model size around 437 MB, and a separate f16 vision projector around 199 MB."
+  ],
+  "candidates": {
+    "moondream2-20250414-f16": {
+      "label": "Moondream2 20250414 F16",
+      "repo": "ggml-org/moondream2-20250414-GGUF",
+      "hf_alias": "ggml-org/moondream2-20250414-GGUF:F16",
+      "priority": 1,
+      "expected_strength": "fast spatial perception and object grounding",
+      "files": [
+        {
+          "role": "model",
+          "filename": "moondream2-text-model-f16_ct-vicuna.gguf",
+          "url": "https://huggingface.co/ggml-org/moondream2-20250414-GGUF/resolve/main/moondream2-text-model-f16_ct-vicuna.gguf"
+        },
+        {
+          "role": "mmproj",
+          "filename": "moondream2-mmproj-f16-20250414.gguf",
+          "url": "https://huggingface.co/ggml-org/moondream2-20250414-GGUF/resolve/main/moondream2-mmproj-f16-20250414.gguf"
+        }
+      ],
+      "llama_server": "llama-server -hf ggml-org/moondream2-20250414-GGUF:F16 --port 8080"
+    },
+    "qwen2-vl-2b-q4-k-m": {
+      "label": "Qwen2-VL 2B Instruct Q4_K_M",
+      "repo": "bartowski/Qwen2-VL-2B-Instruct-GGUF",
+      "hf_alias": "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M",
+      "priority": 2,
+      "expected_strength": "strict JSON adherence and better semantic labels",
+      "files": [
+        {
+          "role": "model",
+          "filename": "Qwen2-VL-2B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "role": "mmproj",
+          "filename": "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
+          "url": "https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf"
+        }
+      ],
+      "llama_server": "llama-server -hf bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M --port 8080"
+    },
+    "smolvlm-256m-q8-official": {
+      "label": "SmolVLM 256M Instruct Q8_0",
+      "repo": "ggml-org/SmolVLM-256M-Instruct-GGUF",
+      "hf_alias": "ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0",
+      "priority": 3,
+      "expected_strength": "smallest official multimodal footprint with projector",
+      "files": [
+        {
+          "role": "model",
+          "filename": "SmolVLM-256M-Instruct-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf"
+        },
+        {
+          "role": "mmproj",
+          "filename": "mmproj-SmolVLM-256M-Instruct-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"
+        }
+      ],
+      "llama_server": "llama-server -hf ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0 --port 8080"
+    },
+    "smolvlm-256m-q4-k-m-community": {
+      "label": "SmolVLM 256M Instruct Q4_K_M community alternate",
+      "repo": "HarshKalburgi/SmolVLM-256M-Instruct-GGUF",
+      "hf_alias": "HarshKalburgi/SmolVLM-256M-Instruct-GGUF:Q4_K_M",
+      "priority": 4,
+      "expected_strength": "tiny quantized fallback; verify multimodal projector compatibility before capsule use",
+      "files": [
+        {
+          "role": "model",
+          "filename": "SmolVLM-256M-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/HarshKalburgi/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q4_K_M.gguf"
+        }
+      ],
+      "llama_server": "llama-server -hf HarshKalburgi/SmolVLM-256M-Instruct-GGUF:Q4_K_M --port 8080"
+    },
+    "smolvlm2-500m-q8-official": {
+      "label": "SmolVLM2 500M Video Instruct Q8_0",
+      "repo": "jc-builds/smolvlm2-500m-gguf",
+      "hf_alias": "jc-builds/smolvlm2-500m-gguf:Q8_0",
+      "priority": 5,
+      "expected_strength": "small CPU-friendly upgrade over SmolVLM 256M; image captioning and VQA with llama.cpp support",
+      "files": [
+        {
+          "role": "model",
+          "filename": "SmolVLM2-500M-Video-Instruct-Q8_0.gguf",
+          "url": "https://huggingface.co/jc-builds/smolvlm2-500m-gguf/resolve/main/SmolVLM2-500M-Video-Instruct-Q8_0.gguf"
+        },
+        {
+          "role": "mmproj",
+          "filename": "mmproj-SmolVLM2-500M-Video-Instruct-f16.gguf",
+          "url": "https://huggingface.co/jc-builds/smolvlm2-500m-gguf/resolve/main/mmproj-SmolVLM2-500M-Video-Instruct-f16.gguf"
+        }
+      ],
+      "llama_server": "llama-server -hf jc-builds/smolvlm2-500m-gguf:Q8_0 --port 8080"
+    }
+  }
+}

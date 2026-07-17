@@ -1,0 +1,506 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer stateful relay data plane on ECS/Fargate behind ALB and CloudFront.
+
+Parameters:
+  RelayContainerUri:
+    Type: String
+  CapsuleImageArns:
+    Type: CommaDelimitedList
+    Description: All capsule image ARNs the relay may inspect + mint auth tokens for (one today; N later).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Resolved VPC (from the relay-network stack) the internal ALB and VPC origin live in.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets (from the relay-network stack) for the internal ALB and Fargate tasks.
+  WebAclArn:
+    Type: String
+    Default: ""
+  RelaySessionSecretArn:
+    Type: String
+  RelayOriginHeaderSecretArn:
+    Type: String
+  CloudFrontKeyGroupId:
+    Type: String
+    MinLength: 1
+    Description: >-
+      CloudFront key group that gates the relay behind signed URLs. REQUIRED — an empty value used to
+      silently disable the signed-URL edge gate (security R2), so the stack now rejects it.
+  SessionTableName:
+    Type: String
+  SessionTableArn:
+    Type: String
+  RelayWarmSeconds:
+    Type: Number
+    Default: -1
+    Description: >-
+      Relay warm policy. -1 = always-on (Fargate stays at 1, instant resume; the multi-tenant-safe
+      default). 0 = scale the relay to zero as soon as it is genuinely idle (cheapest; adds a cold
+      start on the next connect). N>0 = stay warm N seconds after the last session, then scale to zero.
+      Scale-to-zero only fires on a SUCCESSFUL count read of exactly 0 active sessions (fail-safe).
+  RelayMaxCount:
+    Type: Number
+    Default: 1000
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum number of always-on relay tasks for horizontal ECS scaling.
+  PairputerDebug:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  HasWebAcl: !Not [!Equals [!Ref WebAclArn, ""]]
+  AlwaysOnRelay: !Equals [!Ref RelayWarmSeconds, -1]
+
+Resources:
+  RelayExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  RelayTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RelayMicrovmAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:GetMicrovm
+                  - lambda:CreateMicrovmAuthToken
+                Resource: !Ref CapsuleImageArns   # the bundled capsule image(s), if any
+              # Cartridge model: reach ANY MicroVM image tagged as a pairputer capsule — so the relay
+              # serves video/state/input AND ships runtime logs for capsules deployed as their own stacks
+              # AFTER the substrate (ARNs the substrate never knew). Tag-scoped, matching the MCP
+              # controller's MicrovmControlTaggedCapsules grant — nothing over non-pairputer images.
+              - Sid: RelayTaggedCapsules
+                Effect: Allow
+                Action:
+                  - lambda:GetMicrovm
+                  - lambda:CreateMicrovmAuthToken
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/pairputer:capsule: "true"
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref RelaySessionSecretArn
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${RelayCluster}/${AWS::StackName}-stateful-relay"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:DescribeTable
+                  - dynamodb:TransactGetItems
+                Resource:
+                  - !Ref SessionTableArn
+                  - !Sub "${SessionTableArn}/index/*"
+              # Runtime log shipping: the relay pulls capsule service logs from the VM :9000 /dbg endpoints
+              # and writes them to per-capsule CloudWatch groups. Scoped to the relay-owned namespace ONLY
+              # (/pairputer/capsule-runtime/*) — never broad logs:* on "*".
+              - Sid: ShipCapsuleRuntimeLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/pairputer/capsule-runtime/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/pairputer/capsule-runtime/*:log-stream:*"
+
+  RelayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/ecs/${AWS::StackName}-stateful-relay"
+      RetentionInDays: 14
+
+  RelayCluster:
+    Type: AWS::ECS::Cluster
+
+  # The ALB is INTERNAL and only reachable through the CloudFront VPC origin (a service-managed ENI
+  # in our subnets). Ingress is the CloudFront origin-facing prefix list when provided; otherwise the
+  # VPC CIDR (the VPC-origin ENI lives inside this VPC, so this is not public exposure). There is no
+  # public listener and no public IP on this ALB.
+  # No static ingress: CloudFront VPC-origin traffic arrives from the AWS-created
+  # "CloudFront-VPCOrigins-Service-SG" (NOT the VPC CIDR or the edge prefix list — see wall #16). The
+  # AlbFromCloudFrontOriginSg custom resource below opens :80 to that SG once the VPC origin exists, which
+  # is the ONLY path that actually reaches this internal ALB. A prefix-list/CIDR rule here was redundant.
+  RelayAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Internal ALB for pairputer relay; ingress opened to the CloudFront VPC-origin SG
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  RelayTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate relay accepts traffic only from the ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref RelayAlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # INTERNAL ALB in private subnets. CloudFront reaches it only through the VPC origin below over a
+  # private connection, so the CloudFront->origin hop never crosses the public internet (this is what
+  # replaces the old ACM/HTTPS-hop fix, with no DNS name or Route53 zone required).
+  RelayLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internal
+      IpAddressType: ipv4
+      SecurityGroups: [!Ref RelayAlbSecurityGroup]
+      Subnets: !Ref PrivateSubnetIds
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "3600"
+
+  RelayTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8080
+      HealthCheckEnabled: true
+      HealthCheckPath: /healthz
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 5
+      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "5"
+
+  RelayListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref RelayLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "403"
+            ContentType: text/plain
+            MessageBody: forbidden
+
+  RelayListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref RelayListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Pairputer-Origin-Secret
+            Values:
+              - !Sub "{{resolve:secretsmanager:${RelayOriginHeaderSecretArn}:SecretString}}"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref RelayTargetGroup
+
+  RelayTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${AWS::StackName}-stateful-relay"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt RelayExecutionRole.Arn
+      TaskRoleArn: !GetAtt RelayTaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: relay
+          Image: !Ref RelayContainerUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: PAIRPUTER_SESSION_SECRET_ARN
+              Value: !Ref RelaySessionSecretArn
+            - Name: PAIRPUTER_VIDEO_PORT
+              Value: "6903"
+            - Name: PAIRPUTER_RELAY_CLUSTER
+              Value: !Ref RelayCluster
+            - Name: PAIRPUTER_RELAY_SERVICE
+              Value: !Sub "${AWS::StackName}-stateful-relay"
+            - Name: PAIRPUTER_SESSION_TABLE
+              Value: !Ref SessionTableName
+            - Name: PAIRPUTER_RELAY_WARM_SECONDS
+              Value: !Sub "${RelayWarmSeconds}"
+            - Name: PAIRPUTER_DEBUG
+              Value: !Ref PairputerDebug
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref RelayLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: relay
+
+  RelayService:
+    Type: AWS::ECS::Service
+    DependsOn: RelayListenerRule
+    Properties:
+      ServiceName: !Sub "${AWS::StackName}-stateful-relay"
+      Cluster: !Ref RelayCluster
+      TaskDefinition: !Ref RelayTaskDefinition
+      DesiredCount: !If [AlwaysOnRelay, 1, 0]
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 30
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # Private subnets; egress is via the NAT created in the relay-network stack, so no public IP.
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref RelayTaskSecurityGroup]
+          Subnets: !Ref PrivateSubnetIds
+      LoadBalancers:
+        - ContainerName: relay
+          ContainerPort: 8080
+          TargetGroupArn: !Ref RelayTargetGroup
+
+  # Each task holds persistent upstream WebSockets, so CPU/memory target tracking is the
+  # safe horizontal scaling primitive. The relay remains at least one task for the
+  # multi-tenant shared data plane; it scales out independently as concurrent desktops grow.
+  RelayScalableTarget:
+    Condition: AlwaysOnRelay
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: RelayService
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: !Ref RelayMaxCount
+      # Application Auto Scaling expects the ECS cluster *name*, not the cluster ARN
+      # returned by Ref on AWS::ECS::Cluster. ARN shape is ...:cluster/<name>.
+      ResourceId: !Sub
+        - "service/${ClusterName}/${ServiceName}"
+        - ClusterName: !Select [1, !Split ["/", !GetAtt RelayCluster.Arn]]
+          # AWS::ECS::Service Ref is not consistent across CloudFormation resource
+          # versions (it may be the ARN or the name).  We set ServiceName explicitly
+          # above, so derive the exact same name from the nested stack name instead.
+          ServiceName: !Sub "${AWS::StackName}-stateful-relay"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  RelayCpuScalingPolicy:
+    Condition: AlwaysOnRelay
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-cpu-target"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RelayScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  RelayMemoryScalingPolicy:
+    Condition: AlwaysOnRelay
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-memory-target"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RelayScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # CloudFront VPC origin: a service-managed ENI that lets CloudFront reach the INTERNAL ALB privately.
+  # This is the transport that removes the public cleartext hop (security finding #1) without a cert.
+  RelayVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub "${AWS::StackName}-relay-origin"
+        Arn: !Ref RelayLoadBalancer
+        HTTPPort: 80
+        OriginProtocolPolicy: http-only
+
+  # CloudFront VPC-origin traffic does NOT arrive from the VPC CIDR or the CloudFront edge prefix list —
+  # it comes from a service-managed ENI in an AWS-created SG named "CloudFront-VPCOrigins-Service-SG"
+  # (one per VPC, created when the first VPC origin is created). The ALB SG must allow that SG by
+  # reference, or every request silently dies before the ALB (RequestCount=0). The SG only exists after
+  # RelayVpcOrigin, and its id isn't known at template time, so a custom resource wires it. Idempotent.
+  AlbFromCloudFrontOriginSgRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OpenAlbToCloudFrontOriginSg
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              # Describe is a list op and can't be resource/condition-scoped.
+              - Effect: Allow
+                Action: ec2:DescribeSecurityGroups
+                Resource: "*"
+              # SG mutations scoped to security groups in THIS VPC only (least privilege).
+              - Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"
+                Condition:
+                  StringEquals:
+                    ec2:Vpc: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${VpcId}"
+
+  AlbFromCloudFrontOriginSgFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt AlbFromCloudFrontOriginSgRole.Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          VPC_ID: !Ref VpcId
+          ALB_SG: !Ref RelayAlbSecurityGroup
+      Code:
+        ZipFile: |
+          import json, os, urllib.request, boto3
+          def _send(e, ctx, status, reason):
+              b = json.dumps({"Status": status, "Reason": reason[:1000],
+                  "PhysicalResourceId": e.get("PhysicalResourceId", "pairputer-alb-cf-origin-sg"),
+                  "StackId": e["StackId"], "RequestId": e["RequestId"],
+                  "LogicalResourceId": e["LogicalResourceId"], "Data": {}}).encode()
+              urllib.request.urlopen(urllib.request.Request(e["ResponseURL"], data=b, method="PUT",
+                  headers={"content-type": "", "content-length": str(len(b))}), timeout=30)
+          def handler(event, context):
+              try:
+                  if event["RequestType"] == "Delete":
+                      return _send(event, context, "SUCCESS", "revoke handled by SG deletion")
+                  ec2 = boto3.client("ec2"); vpc = os.environ["VPC_ID"]; alb_sg = os.environ["ALB_SG"]
+                  # find the AWS-managed CloudFront VPC-origins service SG in this VPC
+                  r = ec2.describe_security_groups(Filters=[
+                      {"Name": "vpc-id", "Values": [vpc]},
+                      {"Name": "group-name", "Values": ["CloudFront-VPCOrigins-Service-SG"]}])
+                  sgs = r.get("SecurityGroups", [])
+                  if not sgs:
+                      # nothing to do (no VPC origin SG yet) — succeed rather than block the stack
+                      return _send(event, context, "SUCCESS", "CloudFront-VPCOrigins-Service-SG not found; skipped")
+                  cf_sg = sgs[0]["GroupId"]
+                  try:
+                      ec2.authorize_security_group_ingress(GroupId=alb_sg, IpPermissions=[{
+                          "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80,
+                          "UserIdGroupPairs": [{"GroupId": cf_sg, "Description": "CloudFront VPC origin"}]}])
+                  except ec2.exceptions.ClientError as ex:
+                      if "InvalidPermission.Duplicate" not in str(ex): raise
+                  _send(event, context, "SUCCESS", f"ALB {alb_sg} opened to {cf_sg}")
+              except Exception as exc:
+                  print("error:", exc)
+                  try: _send(event, context, "FAILED", f"error: {exc}")
+                  except Exception as se: print("send failed:", se)
+
+  AlbFromCloudFrontOriginSg:
+    Type: Custom::PairputerAlbCloudFrontOriginSg
+    DependsOn: RelayVpcOrigin   # the service SG only exists after the VPC origin
+    Properties:
+      ServiceToken: !GetAtt AlbFromCloudFrontOriginSgFunction.Arn
+      # re-run if the VPC origin changes
+      VpcOriginId: !GetAtt RelayVpcOrigin.Id
+
+  VideoRelayDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: pairputer stateful relay front door
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        WebACLId: !If [HasWebAcl, !Ref WebAclArn, !Ref "AWS::NoValue"]
+        Origins:
+          - Id: relay-alb-origin
+            # For a VPC origin, DomainName is the internal ALB DNS name; CloudFront routes to it via
+            # the VpcOriginConfig ENI, not public DNS. The origin secret header stays as defense-in-depth.
+            DomainName: !GetAtt RelayLoadBalancer.DNSName
+            OriginCustomHeaders:
+              - HeaderName: X-Pairputer-Origin-Secret
+                HeaderValue: !Sub "{{resolve:secretsmanager:${RelayOriginHeaderSecretArn}:SecretString}}"
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt RelayVpcOrigin.Id
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: relay-alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: false
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          # MANDATORY signed-URL edge gate. Previously conditional (!If HasCloudFrontKeyGroup) — an
+          # empty CloudFrontKeyGroupId silently dropped the signed-URL requirement, collapsing the
+          # documented "edge auth before origin" control to just the relay ?t= token. The param is now
+          # required (MinLength 1), so CloudFront ALWAYS requires a valid signed URL. (Security R2.)
+          TrustedKeyGroups: [!Ref CloudFrontKeyGroupId]
+
+Outputs:
+  RelayUrl:
+    Value: !Sub "https://${VideoRelayDistribution.DomainName}"
+  RelayDistributionId:
+    Value: !Ref VideoRelayDistribution
+  RelayClusterName:
+    Value: !Ref RelayCluster
+  RelayServiceName:
+    Value: !Sub "${AWS::StackName}-stateful-relay"
+  RelayTargetGroupArn:
+    Value: !Ref RelayTargetGroup
+  RelayAlbDnsName:
+    Value: !GetAtt RelayLoadBalancer.DNSName
+  RelayVpcOriginId:
+    Value: !GetAtt RelayVpcOrigin.Id
+  RelayWarmSeconds:
+    Value: !Ref RelayWarmSeconds

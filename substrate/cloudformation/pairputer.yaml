@@ -1,0 +1,904 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  pairputer production stack: Cognito OAuth, AgentCore MCP control plane, and
+  a stateful ECS/Fargate relay behind CloudFront/ALB. No Lambda data-plane relay.
+
+Parameters:
+  # --- Day 0 vs Day 1: where do the container images come from? -------------------------------------
+  ImageSource:
+    Type: String
+    Default: Public
+    AllowedValues: [Public, Private]
+    Description: >
+      Public (default): 1-click with pairputer's signed, digest-pinned public-ECR images — zero inputs,
+      nothing to build. Private: bring your own images in your account's private ECR (set the two
+      Private*ContainerUri params below). Public mode drives AgentCore via an API-backed custom resource
+      (the native CFN resource only accepts private ECR); Private mode uses the native AgentCore resource.
+  PrivateMcpContainerUri:
+    Type: String
+    Default: ""
+    Description: >
+      Private mode ONLY: your MCP server image in private ECR (12-digit.dkr.ecr…, @sha256 or :tag).
+      Leave BLANK to auto-copy pairputer's signed public MCP image into your private ECR (verified via
+      cosign, then crane-copied by an in-stack CodeBuild). Ignored in Public mode.
+    AllowedPattern: '^$|^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+[:@].+$'
+  PrivateRelayContainerUri:
+    Type: String
+    Default: ""
+    Description: >
+      Private mode ONLY: your stateful-relay image in private ECR. Leave BLANK to auto-copy pairputer's
+      signed public relay image into your private ECR (verify + copy). Ignored in Public mode.
+    AllowedPattern: '^$|^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+[:@].+$'
+  # Public-mode image digests (advanced override — normally leave as the signed published defaults).
+  # Signed public images: re-published under pairputer-* by the publish-images GitHub workflow
+  # (keyless cosign, signed as Pairputer/pairputer-internal). Verify with scripts/verify-images.sh.
+  ContainerUri:
+    Type: String
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:924dba205d2356d16c76731e099c1e9d012c163d874fe877e57c7acacf4f915d"
+    Description: >
+      Public-mode MCP image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
+      Verify out of band with scripts/verify-images.sh. (Private mode uses PrivateMcpContainerUri instead.)
+    AllowedPattern: '^public\.ecr\.aws/[a-z0-9][a-z0-9._-]*/[^@]+@sha256:[0-9a-f]{64}$'
+  RelayContainerUri:
+    Type: String
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:19bfb0b1f64932e005c085afb415505d7206b6b57b657250d6a81a9c37120f9b"
+    Description: >
+      Public-mode relay image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
+      (Private mode uses PrivateRelayContainerUri instead.)
+    AllowedPattern: '^public\.ecr\.aws/[a-z0-9][a-z0-9._-]*/[^@]+@sha256:[0-9a-f]{64}$'
+  # --- Reference capsule (DOOM / Hellbox) --------------------------------------------------------------
+  BundleReferenceCapsule:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      true (default): bundle the DOOM ("Hellbox") reference capsule so the substrate has something playable
+      out of the box (builds the MicroVM image + registers it with the MCP server). false: deploy the bare
+      pairputer substrate with no capsule — the platform runs, and capsule tools report "no capsules deployed"
+      until you register one. DOOM is a separate build/artifact; this only controls whether it ships with the substrate.
+  DoomImageArnOverride:
+    Type: String
+    Default: ""
+    Description: Optional prebuilt DOOM MicroVM image ARN. Leave empty to let this stack build the image.
+    AllowedPattern: '^$|^arn:aws:lambda:[a-z0-9-]+:\d{12}:microvm-image:.+$'
+  AllowDoomImageArnOverride:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Explicit opt-in required before DoomImageArnOverride can bypass the stack-managed DoomImageStack.
+  DoomCodeArtifactUri:
+    Type: String
+    # Public agent-doom build context (WAD-free, integrity-hashed — filename embeds its tree SHA-256).
+    # Published to pairputer-launch-<account> with a CloudFormation-only read policy (anon GET 403).
+    # Republish with package-doom-image.sh + s3 cp; deploy.sh supplies its own for CLI deploys.
+    Default: "s3://pairputer-launch-932930471665/pairputer/microvm-image/pairputer-doom-context-d3160aa750c221da2609a1a0a205ff15f5eb3699dcdf67ea95089577d24301a0.zip"
+    Description: >
+      S3 URI for the WAD-free DOOM MicroVM build context zip (used only when building a bundled image
+      in-stack). Defaults to the public agent-doom context. Required unless DoomImageArnOverride is set.
+    AllowedPattern: '^$|^s3://[^\s]+$'
+  DoomCodeArtifactBucket:
+    Type: String
+    Default: "pairputer-launch-932930471665"
+    Description: >
+      S3 bucket containing DoomCodeArtifactUri (bundled-image build only). Defaults to the public
+      pairputer launch bucket. Required unless DoomImageArnOverride is set.
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+  DoomImageName:
+    Type: String
+    Default: hellbox-doom
+    Description: Account-local Lambda MicroVM image name created by the stack.
+    AllowedPattern: '^[a-zA-Z0-9-_]{1,64}$'
+  DoomBaseImageArn:
+    Type: String
+    Default: ""
+    Description: Optional managed base image ARN. Leave empty for the regional al2023-1 base image.
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:lambda:[a-z0-9-]+:aws:microvm-image:[a-zA-Z0-9-_]+$'
+  DoomBaseImageVersion:
+    Type: String
+    Default: "0"
+    Description: Managed base image version used by AWS::Lambda::MicrovmImage.
+    AllowedPattern: '^[^\s]+$'
+  DoomImageMinimumMemoryMiB:
+    Type: Number
+    Default: 2048
+    MinValue: 2048
+    MaxValue: 32768
+    Description: Minimum memory for each DOOM MicroVM.
+  NetworkingMode:
+    Type: String
+    Default: CreateVpcFckNat
+    AllowedValues: [ExistingVpc, CreateVpcFckNat, CreateVpcNatGateway]
+    Description: >
+      How the relay gets PRIVATE subnets for its internal ALB (required by CloudFront VPC origins).
+      ExistingVpc: bring your own VpcId + PrivateSubnetIds (must already have egress). CreateVpcFckNat:
+      dedicated VPC + a fck-nat instance (~$3/mo). CreateVpcNatGateway: dedicated VPC + managed NAT (~$32/mo).
+  VpcId:
+    Type: String
+    Default: ""
+    Description: ExistingVpc mode only — the VPC id to deploy the relay into.
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: ExistingVpc mode only — PRIVATE subnets (with egress) for the internal ALB and Fargate tasks.
+  VpcCidr:
+    Type: String
+    Default: ""
+    Description: >
+      ExistingVpc mode only. LEAVE BLANK — the stack resolves the CIDR of your VpcId automatically. Only set
+      this (e.g. 10.0.0.0/16) as an advanced override.
+    AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+  FckNatAmiId:
+    Type: String
+    Default: ""
+    Description: >
+      CreateVpcFckNat mode only. LEAVE BLANK — the stack automatically resolves the current fck-nat ARM64
+      AMI for this region at deploy time. Only set this to pin a specific fck-nat AMI id (e.g. ami-0123…)
+      as an advanced override.
+    AllowedPattern: '^$|^ami-[0-9a-f]{8,}$'
+  NewVpcCidr:
+    Type: String
+    Default: 10.71.0.0/16
+    Description: Create* modes only — CIDR for the dedicated VPC the stack creates.
+  RuntimeName:
+    Type: String
+    Default: pairputer_mcp_stateful
+    Description: AgentCore runtime name. Pattern [a-zA-Z][a-zA-Z0-9_]{0,47}.
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]{0,47}$'
+  CodexCallbackUrl:
+    Type: String
+    Default: "http://localhost:5555/callback"
+    Description: Exact OAuth callback URL Codex uses.
+  CognitoDomainPrefix:
+    Type: String
+    Default: pairputer-prod-auth
+    Description: Lowercase Cognito hosted UI domain prefix. Must be unique in the region.
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+  CapsuleManifestJson:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional capability manifest for the deployed capsule (capsule.yaml as JSON). When set, the MCP
+      server registers the agent-interaction tools it declares (Tier 1/2 in interaction.md) so the AI
+      agent can observe and act in the live capsule alongside the human. Leave empty for a stream-only
+      (Tier 0) capsule like classic hellbox-doom. deploy.sh fills this automatically when the packaged
+      capsule context contains a capsule.yaml.
+  TenantStorageBucket:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional S3 bucket for durable per-tenant workspace storage (the Workbench's
+      workspace/persistent/ folder). The control plane mirrors that subtree to
+      tenant-storage/<tenantId>/<imageId>/ at freeze/trash and restores it into fresh VMs; the MicroVM
+      itself never receives credentials. Empty = feature disabled.
+  ReferenceCapsuleId:
+    Type: String
+    Default: agent-doom
+    Description: >-
+      Registry id/key for the bundled reference capsule (the MCP's default capsule). deploy.sh derives it
+      from the packaged capsule.yaml. Was hardcoded "doom" (Hellbox); now follows the bundled capsule.
+  ReferenceCapsuleName:
+    Type: String
+    Default: Agent DOOM
+    Description: Display name for the bundled reference capsule. deploy.sh fills from capsule.yaml.
+  ReferenceCapsuleDescription:
+    Type: String
+    Default: DOOM with an in-VM agent bridge — human plays live; the agent observes and drives via tools.
+    Description: Display description for the bundled reference capsule. deploy.sh fills from capsule.yaml.
+  SuperAdminEmail:
+    Type: String
+    Default: ""
+    Description: >-
+      Email address for the first pairputer super-admin. Cognito emails a ONE-TIME temporary password to
+      this address (you set your own permanent password on first login). Leave blank to skip auto-creating
+      the admin and instead use the CreateSuperAdmin* stack-output commands locally. No password is ever
+      stored in this template.
+    AllowedPattern: '^$|^[^@]+@[^@]+\.[^@]+$'
+  WebAclArn:
+    Type: String
+    Default: ""
+    Description: Optional existing CLOUDFRONT-scoped WAFv2 WebACL ARN. Leave empty to create the nested CloudFront WAF when deploying in us-east-1.
+  EnableCloudFrontWaf:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create and attach the nested CloudFront-scope WAF when the stack is deployed in us-east-1 and WebAclArn is empty.
+  CloudFrontWafRateLimitPerFiveMinutes:
+    Type: Number
+    Default: 2000000
+    MinValue: 10000
+    MaxValue: 2000000000
+    Description: Coarse abuse ceiling per source IP per 5 minutes. Authenticated per-session input limits are enforced in the relay; this ceiling must tolerate shared NATs.
+  RelayWarmSeconds:
+    Type: Number
+    Default: -1
+    Description: >-
+      Relay warm policy. -1 = always-on (Fargate stays at 1, instant resume; multi-tenant-safe default).
+      0 = scale the relay to zero when genuinely idle (~$15/mo -> ~$0 idle; adds a cold start on the
+      next connect). N>0 = stay warm N seconds after the last session, then scale down. Scale-to-zero
+      only fires on a SUCCESSFUL count read of EXACTLY 0 active sessions (fail-safe — a stale/failed read
+      leaves it warm, so a live session is never killed).
+  RelayMaxCount:
+    Type: Number
+    Default: 1000
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum ECS relay task count for horizontal scaling of persistent desktop streams.
+  PairputerDebug:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable verbose capsule input diagnostics and the relay /vmdbg log-readback route. Leave false for production.
+  InputSelftestEnforce:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: When true, the DOOM image build fails if its input self-test does not pass, so a flaky build never ships with broken keyboard/mouse.
+
+Rules:
+  DoomOverrideRequiresExplicitAllow:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref DoomImageArnOverride, ""]
+          - !Equals [!Ref AllowDoomImageArnOverride, "true"]
+        AssertDescription: DoomImageArnOverride bypasses DoomImageStack and requires AllowDoomImageArnOverride=true.
+  RequireDoomArtifactUnlessOverride:
+    # Only relevant when the reference capsule is bundled AND built in-stack.
+    RuleCondition: !Equals [!Ref BundleReferenceCapsule, "true"]
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref DoomImageArnOverride, ""]]
+          - !And
+            - !Not [!Equals [!Ref DoomCodeArtifactUri, ""]]
+            - !Not [!Equals [!Ref DoomCodeArtifactBucket, ""]]
+        AssertDescription: Set DoomCodeArtifactUri and DoomCodeArtifactBucket, or set DoomImageArnOverride.
+
+Conditions:
+  # Public (default) = pairputer public-ECR images + API-backed AgentCore custom resource.
+  # Private = bring-your-own private-ECR images + native AgentCore resource.
+  UsePrivateImages: !Equals [!Ref ImageSource, Private]
+  UsePublicImages: !Equals [!Ref ImageSource, Public]
+  # Auto-copy (verify + crane public->private ECR) ONLY in Private mode AND only for an image whose private
+  # URI was left blank. Public mode provisions NO copy/CodeBuild infra at all.
+  CopyMcpImage: !And
+    - !Equals [!Ref ImageSource, Private]
+    - !Equals [!Ref PrivateMcpContainerUri, ""]
+  CopyRelayImage: !And
+    - !Equals [!Ref ImageSource, Private]
+    - !Equals [!Ref PrivateRelayContainerUri, ""]
+  # Any copy at all? (used to gate the shared copier CodeBuild project + ECR namespace.)
+  CopyAnyImage: !And
+    - !Equals [!Ref ImageSource, Private]
+    - !Or
+      - !Equals [!Ref PrivateMcpContainerUri, ""]
+      - !Equals [!Ref PrivateRelayContainerUri, ""]
+  # 1-click needs the fck-nat AMI resolved without deploy.sh: resolve it in-stack when the mode builds a
+  # fck-nat VPC and no AMI was supplied. (deploy.sh still resolves + passes one for CLI deploys.)
+  ResolveFckNatAmi: !And
+    - !Equals [!Ref NetworkingMode, CreateVpcFckNat]
+    - !Equals [!Ref FckNatAmiId, ""]
+  # ExistingVpc console users don't run deploy.sh, so resolve the supplied VPC's CIDR in-stack when blank.
+  ResolveVpcCidr: !And
+    - !Equals [!Ref NetworkingMode, ExistingVpc]
+    - !Equals [!Ref VpcCidr, ""]
+  # Bundle the DOOM reference capsule at all? When false, the substrate ships capsule-empty.
+  BundleCapsule: !Equals [!Ref BundleReferenceCapsule, "true"]
+  # Build the capsule MicroVM image in-stack: bundling AND no prebuilt override supplied.
+  BuildDoomImage: !And
+    - !Equals [!Ref BundleReferenceCapsule, "true"]
+    - !Equals [!Ref DoomImageArnOverride, ""]
+  # Use a supplied prebuilt capsule ARN: bundling AND an override is set.
+  UseDoomImageOverride: !And
+    - !Equals [!Ref BundleReferenceCapsule, "true"]
+    - !Not [!Equals [!Ref DoomImageArnOverride, ""]]
+  UseProvidedWebAcl: !Not [!Equals [!Ref WebAclArn, ""]]
+  CreateCloudFrontWaf: !And
+    - !Equals [!Ref EnableCloudFrontWaf, "true"]
+    - !Equals [!Ref WebAclArn, ""]
+    - !Equals [!Ref AWS::Region, us-east-1]
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Start here — the only two you need to deploy
+        Parameters:
+          - ImageSource
+          - SuperAdminEmail
+      - Label:
+          default: Container Images (only if ImageSource = Private)
+        Parameters:
+          - PrivateMcpContainerUri
+          - PrivateRelayContainerUri
+          - ContainerUri
+          - RelayContainerUri
+      - Label:
+          default: Network
+        Parameters:
+          - NetworkingMode
+          - VpcId
+          - PrivateSubnetIds
+          - VpcCidr
+          - NewVpcCidr
+          - FckNatAmiId
+      - Label:
+          default: Reference Capsule (DOOM / Hellbox)
+        Parameters:
+          - BundleReferenceCapsule
+          - DoomImageArnOverride
+          - AllowDoomImageArnOverride
+          - DoomCodeArtifactUri
+          - DoomCodeArtifactBucket
+          - DoomImageName
+          - DoomBaseImageArn
+          - DoomBaseImageVersion
+          - DoomImageMinimumMemoryMiB
+      - Label:
+          default: pairputer Runtime
+        Parameters:
+          - RuntimeName
+          - CodexCallbackUrl
+          - CognitoDomainPrefix
+          - RelayWarmSeconds
+          - PairputerDebug
+          - InputSelftestEnforce
+      - Label:
+          default: Security
+        Parameters:
+          - EnableCloudFrontWaf
+          - CloudFrontWafRateLimitPerFiveMinutes
+          - WebAclArn
+    ParameterLabels:
+      BundleReferenceCapsule:
+        default: Bundle the DOOM reference capsule? (uncheck for a bare substrate)
+      ImageSource:
+        default: Image source (Public = 1-click; Private = bring your own)
+      PrivateMcpContainerUri:
+        default: Your MCP image (Private mode)
+      PrivateRelayContainerUri:
+        default: Your relay image (Private mode)
+      ContainerUri:
+        default: MCP image (Public mode — advanced override)
+      RelayContainerUri:
+        default: Relay image (Public mode — advanced override)
+      NetworkingMode:
+        default: Networking mode
+      VpcId:
+        default: Existing VPC (ExistingVpc mode)
+      PrivateSubnetIds:
+        default: Existing private subnets (ExistingVpc mode)
+      VpcCidr:
+        default: Existing VPC CIDR — leave blank to auto-resolve (advanced override only)
+      NewVpcCidr:
+        default: New VPC CIDR (Create* modes)
+      FckNatAmiId:
+        default: fck-nat AMI — leave blank to auto-resolve (advanced override only)
+      ContainerUri:
+        default: MCP server image URI
+      RelayContainerUri:
+        default: Stateful relay image URI
+      DoomImageArnOverride:
+        default: Existing DOOM MicroVM image ARN override
+      AllowDoomImageArnOverride:
+        default: Allow existing DOOM image override
+      DoomCodeArtifactUri:
+        default: WAD-free DOOM MicroVM build context S3 URI
+      DoomCodeArtifactBucket:
+        default: DOOM MicroVM build context S3 bucket
+      DoomImageName:
+        default: DOOM MicroVM image name
+      DoomBaseImageArn:
+        default: Managed MicroVM base image ARN override
+      DoomBaseImageVersion:
+        default: Managed MicroVM base image version
+      DoomImageMinimumMemoryMiB:
+        default: DOOM MicroVM minimum memory
+      RuntimeName:
+        default: AgentCore runtime name
+      CodexCallbackUrl:
+        default: Codex OAuth callback URL
+      CognitoDomainPrefix:
+        default: Cognito hosted UI domain prefix
+      SuperAdminEmail:
+        default: First super-admin email (receives a one-time temp password)
+      RelayWarmSeconds:
+        default: Relay warm seconds after Freeze
+      PairputerDebug:
+        default: Enable capsule input diagnostics
+      InputSelftestEnforce:
+        default: Fail build if input self-test fails
+      EnableCloudFrontWaf:
+        default: Create nested CloudFront WAF
+      CloudFrontWafRateLimitPerFiveMinutes:
+        default: CloudFront WAF per-IP rate limit
+      WebAclArn:
+        default: Existing CloudFront WAF WebACL ARN override
+
+Resources:
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/security.yaml
+
+  IdentityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/identity.yaml
+      Parameters:
+        CodexCallbackUrl: !Ref CodexCallbackUrl
+        CognitoDomainPrefix: !Ref CognitoDomainPrefix
+        SuperAdminEmail: !Ref SuperAdminEmail
+
+  SessionsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/sessions.yaml
+
+  CloudFrontWafStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateCloudFrontWaf
+    Properties:
+      TemplateURL: nested/cloudfront-waf.yaml
+      Parameters:
+        RateLimitPerFiveMinutes: !Ref CloudFrontWafRateLimitPerFiveMinutes
+
+  # --- fck-nat AMI resolver (in-stack, for the console 1-click) --------------------------------------
+  FckNatAmiResolverRole:
+    Type: AWS::IAM::Role
+    Condition: ResolveFckNatAmi
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FckNatAmiResolver
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              # ec2:DescribeImages does not support resource-level scoping (AWS limitation); read-only.
+              - Effect: Allow
+                Action: ec2:DescribeImages
+                Resource: "*"
+
+  FckNatAmiResolverFunction:
+    Type: AWS::Lambda::Function
+    Condition: ResolveFckNatAmi
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt FckNatAmiResolverRole.Arn
+      Timeout: 30
+      Code:
+        ZipFile: |
+          const https=require("https");
+          const {EC2Client,DescribeImagesCommand}=require("@aws-sdk/client-ec2");
+          const ec2=new EC2Client({});
+          exports.handler=async(e,c)=>{let id=e.PhysicalResourceId||"PairputerFckNatAmi";try{if(e.RequestType==="Delete")return send(e,c,"SUCCESS",{},id);
+          // Latest public fck-nat ARM64 AMI (owner 568608671756), same filter deploy.sh uses.
+          let r=await ec2.send(new DescribeImagesCommand({Owners:["568608671756"],Filters:[{Name:"name",Values:["fck-nat-al2023-*"]},{Name:"architecture",Values:["arm64"]},{Name:"state",Values:["available"]}]}));
+          let imgs=(r.Images||[]).sort((a,b)=>(a.CreationDate<b.CreationDate?1:-1));if(!imgs.length)throw new Error("no fck-nat ARM64 AMI found for owner 568608671756");
+          await send(e,c,"SUCCESS",{ImageId:imgs[0].ImageId,Name:imgs[0].Name},imgs[0].ImageId)}catch(x){await send(e,c,"FAILED",{Error:String(x.stack||x)},id)}};
+          function send(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},r=>{r.on("data",()=>{});r.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  FckNatAmi:
+    Type: Custom::PairputerFckNatAmi
+    Condition: ResolveFckNatAmi
+    Properties:
+      ServiceToken: !GetAtt FckNatAmiResolverFunction.Arn
+
+  # --- VPC CIDR resolver (in-stack, for ExistingVpc console users) -----------------------------------
+  # A console user picking ExistingVpc shouldn't have to look up their VPC's CIDR. When VpcCidr is left
+  # blank we resolve it from the supplied VpcId. (deploy.sh resolves + passes it for CLI deploys.)
+  VpcCidrResolverRole:
+    Type: AWS::IAM::Role
+    Condition: ResolveVpcCidr
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VpcCidrResolver
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              # ec2:DescribeVpcs does not support resource-level scoping (AWS limitation); read-only.
+              - Effect: Allow
+                Action: ec2:DescribeVpcs
+                Resource: "*"
+
+  VpcCidrResolverFunction:
+    Type: AWS::Lambda::Function
+    Condition: ResolveVpcCidr
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt VpcCidrResolverRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          VPC_ID: !Ref VpcId
+      Code:
+        ZipFile: |
+          const https=require("https");
+          const {EC2Client,DescribeVpcsCommand}=require("@aws-sdk/client-ec2");
+          const ec2=new EC2Client({});
+          exports.handler=async(e,c)=>{let id=e.PhysicalResourceId||"PairputerVpcCidr";try{if(e.RequestType==="Delete")return send(e,c,"SUCCESS",{},id);
+          let vpc=process.env.VPC_ID; if(!vpc)throw new Error("VPC_ID not set");
+          let r=await ec2.send(new DescribeVpcsCommand({VpcIds:[vpc]}));
+          let cidr=(r.Vpcs&&r.Vpcs[0]&&r.Vpcs[0].CidrBlock)||"";if(!cidr)throw new Error("no CidrBlock for "+vpc);
+          await send(e,c,"SUCCESS",{Cidr:cidr},vpc)}catch(x){await send(e,c,"FAILED",{Error:String(x.stack||x)},id)}};
+          function send(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},r=>{r.on("data",()=>{});r.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  VpcCidrLookup:
+    Type: Custom::PairputerVpcCidr
+    Condition: ResolveVpcCidr
+    Properties:
+      ServiceToken: !GetAtt VpcCidrResolverFunction.Arn
+      VpcId: !Ref VpcId   # re-run if the VpcId changes
+
+  DoomImageOverrideValidatorRole:
+    Type: AWS::IAM::Role
+    Condition: UseDoomImageOverride
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DoomImageOverrideValidator
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action:
+                  - lambda:GetMicrovmImage
+                  - lambda:GetMicrovmImageVersion
+                Resource: "*"
+
+  DoomImageOverrideValidatorFunction:
+    Type: AWS::Lambda::Function
+    Condition: UseDoomImageOverride
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt DoomImageOverrideValidatorRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          const https=require("https");
+          // The MicroVM control-plane SDK client is a PREVIEW package NOT bundled in the nodejs20 Lambda
+          // runtime. require() it lazily so a missing module can't crash the handler on init (which would
+          // never send a CFN response -> the stack hangs on this custom resource for the full timeout).
+          let mvm=null,GetImg=null,GetVer=null;
+          try{const m=require("@aws-sdk/client-lambda-microvms");GetImg=m.GetMicrovmImageCommand;GetVer=m.GetMicrovmImageVersionCommand;mvm=new m.LambdaMicrovmsClient({});}catch(_){/* preview SDK absent: validation degrades to a no-op (SUCCESS) below */}
+          exports.handler=async(e,c)=>{let arn=e.ResourceProperties.ImageArn||"",id=e.PhysicalResourceId||`PairputerDoomImageOverride:${arn||"unset"}`;try{if(e.RequestType==="Delete")return send(e,c,"SUCCESS",{},id);if(!arn)throw new Error("ImageArn is required");if(!mvm)return send(e,c,"SUCCESS",{ImageArn:arn,LatestActiveImageVersion:"unknown",ImageState:"UNKNOWN",VersionState:"UNKNOWN",VersionStatus:"UNKNOWN",Skipped:"lambda-microvms SDK not bundled; override validation skipped"},id);let img=await mvm.send(new GetImg({imageIdentifier:arn}));let v=img.latestActiveImageVersion||"";if(!v)throw new Error(`DoomImageArnOverride ${arn} has no latestActiveImageVersion; state=${img.state||"UNKNOWN"}`);let ver=await mvm.send(new GetVer({imageIdentifier:arn,imageVersion:v}));if(ver.status&&ver.status!=="ACTIVE")throw new Error(`DoomImageArnOverride ${arn} latest version ${v} is ${ver.status}, not ACTIVE`);if(ver.state&&ver.state!=="SUCCESSFUL")throw new Error(`DoomImageArnOverride ${arn} latest version ${v} state is ${ver.state||"UNKNOWN"}`);await send(e,c,"SUCCESS",{ImageArn:arn,LatestActiveImageVersion:String(v),ImageState:img.state||"",VersionState:ver.state||"",VersionStatus:ver.status||""},id)}catch(x){await send(e,c,"FAILED",{Error:String(x.stack||x)},id)}};
+          function send(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},r=>{r.on("data",()=>{});r.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  DoomImageOverrideValidation:
+    Type: Custom::PairputerDoomImageOverrideValidation
+    Condition: UseDoomImageOverride
+    Properties:
+      ServiceToken: !GetAtt DoomImageOverrideValidatorFunction.Arn
+      ImageArn: !Ref DoomImageArnOverride
+
+  DoomImageStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: BuildDoomImage
+    Properties:
+      TemplateURL: nested/microvm-image.yaml
+      Parameters:
+        DoomCodeArtifactUri: !Ref DoomCodeArtifactUri
+        DoomCodeArtifactBucket: !Ref DoomCodeArtifactBucket
+        DoomImageName: !Ref DoomImageName
+        DoomBaseImageArn: !Ref DoomBaseImageArn
+        DoomBaseImageVersion: !Ref DoomBaseImageVersion
+        DoomImageMinimumMemoryMiB: !Ref DoomImageMinimumMemoryMiB
+        PairputerDebug: !Ref PairputerDebug
+        InputSelftestEnforce: !Ref InputSelftestEnforce
+
+  RelayNetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/relay-network.yaml
+      Parameters:
+        NetworkingMode: !Ref NetworkingMode
+        VpcId: !Ref VpcId
+        PrivateSubnetIds: !Join [",", !Ref PrivateSubnetIds]
+        VpcCidr: !If [ResolveVpcCidr, !GetAtt VpcCidrLookup.Cidr, !Ref VpcCidr]
+        FckNatAmiId: !If [ResolveFckNatAmi, !GetAtt FckNatAmi.ImageId, !Ref FckNatAmiId]
+        NewVpcCidr: !Ref NewVpcCidr
+
+  # Private-mode image copier (verify + crane public->private ECR). Created ONLY when a private URI was
+  # left blank. Public mode never instantiates this.
+  ImageCopyStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CopyAnyImage
+    Properties:
+      TemplateURL: nested/image-copy.yaml
+      Parameters:
+        CopyMcp: !If [CopyMcpImage, "true", "false"]
+        CopyRelay: !If [CopyRelayImage, "true", "false"]
+        PublicMcpUri: !Ref ContainerUri
+        PublicRelayUri: !Ref RelayContainerUri
+        # Lowercase, deterministic ECR repo prefix (this stack's name). ECR repo names must be lowercase,
+        # so we pass the root stack name (lowercase) rather than let the nested stack use its own
+        # auto-generated (mixed-case) AWS::StackName. Names: <prefix>-private/mcp, <prefix>-private/relay.
+        RepoNamePrefix: !Ref AWS::StackName
+
+  RelayStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/relay.yaml
+      Parameters:
+        # Effective image: public digest (Public mode) | user's private URI | auto-copied private digest.
+        RelayContainerUri: !If
+          - UsePublicImages
+          - !Ref RelayContainerUri
+          - !If [CopyRelayImage, !GetAtt ImageCopyStack.Outputs.RelayPrivateUri, !Ref PrivateRelayContainerUri]
+        # All capsule image ARNs (the resolved reference capsule; add more as capsules are deployed).
+        # Capsule-empty deploy => a non-existent placeholder ARN (IAM can't scope to an empty list; this
+        # grants nothing real, and there are no capsules to control anyway).
+        CapsuleImageArns: !If
+          - BundleCapsule
+          - !If
+            - UseDoomImageOverride
+            - !GetAtt DoomImageOverrideValidation.ImageArn
+            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+          - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:pairputer-no-capsule"
+        VpcId: !GetAtt RelayNetworkStack.Outputs.ResolvedVpcId
+        PrivateSubnetIds: !GetAtt RelayNetworkStack.Outputs.ResolvedPrivateSubnetIds
+        WebAclArn: !If
+          - UseProvidedWebAcl
+          - !Ref WebAclArn
+          - !If
+            - CreateCloudFrontWaf
+            - !GetAtt CloudFrontWafStack.Outputs.WebAclArn
+            - ""
+        RelaySessionSecretArn: !GetAtt SecurityStack.Outputs.RelaySessionSecretArn
+        RelayOriginHeaderSecretArn: !GetAtt SecurityStack.Outputs.RelayOriginHeaderSecretArn
+        CloudFrontKeyGroupId: !GetAtt SecurityStack.Outputs.CloudFrontKeyGroupId
+        SessionTableName: !GetAtt SessionsStack.Outputs.SessionTableName
+        SessionTableArn: !GetAtt SessionsStack.Outputs.SessionTableArn
+        RelayWarmSeconds: !Ref RelayWarmSeconds
+        RelayMaxCount: !Ref RelayMaxCount
+        PairputerDebug: !Ref PairputerDebug
+
+  AgentCoreStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/agentcore.yaml
+      Parameters:
+        # Mode-selected image + which AgentCore implementation to use. Public mode can't use the native
+        # AWS::BedrockAgentCore::Runtime (its ContainerUri schema rejects public.ecr.aws), so it drives an
+        # API-backed custom resource; Private mode uses the native resource with the user's private URI.
+        ContainerUri: !If
+          - UsePublicImages
+          - !Ref ContainerUri
+          - !If [CopyMcpImage, !GetAtt ImageCopyStack.Outputs.McpPrivateUri, !Ref PrivateMcpContainerUri]
+        # The native AWS::BedrockAgentCore::Runtime handler fails updates after a runtime has
+        # accumulated versions (it returns only a stack-level ValidationError, while the direct
+        # AgentCore API succeeds with the identical request). Use the API-backed provider for both
+        # public and private images so CloudFormation remains the source of truth for updates.
+        UseCustomRuntime: "true"
+        # Default capsule image ARN — the PAIRPUTER_IMAGE_ARN fallback. Empty on a capsule-empty substrate.
+        DoomImageArn: !If
+          - BundleCapsule
+          - !If
+            - UseDoomImageOverride
+            - !GetAtt DoomImageOverrideValidation.ImageArn
+            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+          - ""
+        # Capsule registry (id -> {arn,name,description}) the MCP server serves. "{}" (empty) on a
+        # capsule-empty substrate — the server runs and capsule tools report "no capsules". Add more
+        # capsules here as more object entries (the server also accepts the legacy id->"arn" string form).
+        # id/name/description come from ReferenceCapsule* params (deploy.sh derives them from the bundled
+        # capsule.yaml) — previously hardcoded to Hellbox, which mislabeled agent-doom and kept the wrong
+        # default. name/description must not contain literal double-quotes (deploy.sh sanitizes them).
+        CapsuleRegistryJson: !If
+          - BundleCapsule
+          - !If
+            - UseDoomImageOverride
+            - !Sub ['{"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}}', {I: !Ref ReferenceCapsuleId, A: !GetAtt DoomImageOverrideValidation.ImageArn, N: !Ref ReferenceCapsuleName, D: !Ref ReferenceCapsuleDescription}]
+            - !Sub ['{"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}}', {I: !Ref ReferenceCapsuleId, A: !GetAtt DoomImageStack.Outputs.DoomImageArn, N: !Ref ReferenceCapsuleName, D: !Ref ReferenceCapsuleDescription}]
+          - "{}"
+        # All capsule image ARNs for least-privilege MicroVM-control IAM. Placeholder when capsule-empty.
+        CapsuleImageArns: !If
+          - BundleCapsule
+          - !If
+            - UseDoomImageOverride
+            - !GetAtt DoomImageOverrideValidation.ImageArn
+            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+          - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:pairputer-no-capsule"
+        RuntimeName: !Ref RuntimeName
+        RelayUrl: !GetAtt RelayStack.Outputs.RelayUrl
+        RelaySessionSecretArn: !GetAtt SecurityStack.Outputs.RelaySessionSecretArn
+        CloudFrontSigningPrivateKeySecretArn: !GetAtt SecurityStack.Outputs.CloudFrontSigningPrivateKeySecretArn
+        CloudFrontPublicKeyId: !GetAtt SecurityStack.Outputs.CloudFrontPublicKeyId
+        RelayClusterName: !GetAtt RelayStack.Outputs.RelayClusterName
+        RelayServiceName: !GetAtt RelayStack.Outputs.RelayServiceName
+        RelayTargetGroupArn: !GetAtt RelayStack.Outputs.RelayTargetGroupArn
+        SessionTableName: !GetAtt SessionsStack.Outputs.SessionTableName
+        SessionTableArn: !GetAtt SessionsStack.Outputs.SessionTableArn
+        RelayWarmSeconds: !Ref RelayWarmSeconds
+        DiscoveryUrl: !GetAtt IdentityStack.Outputs.DiscoveryUrl
+        M2MClientId: !GetAtt IdentityStack.Outputs.M2MClientId
+        CodexClientId: !GetAtt IdentityStack.Outputs.CodexClientId
+        ChatGPTClientId: !GetAtt IdentityStack.Outputs.ChatGPTClientId
+        ClaudeClientId: !GetAtt IdentityStack.Outputs.ClaudeClientId
+        RequiredScope: !GetAtt IdentityStack.Outputs.M2MScope
+        UserPoolId: !GetAtt IdentityStack.Outputs.UserPoolId
+        CapsuleManifestJson: !Ref CapsuleManifestJson
+        TenantStorageBucket: !Ref TenantStorageBucket
+
+Outputs:
+  DoomImageArn:
+    Condition: BundleCapsule
+    Description: DOOM MicroVM image ARN used by AgentCore.
+    Value: !If
+      - UseDoomImageOverride
+      - !GetAtt DoomImageOverrideValidation.ImageArn
+      - !GetAtt DoomImageStack.Outputs.DoomImageArn
+  DoomImageState:
+    Condition: BundleCapsule
+    Description: State of the stack-built DOOM image, or EXTERNAL when using an override.
+    Value: !If
+      - UseDoomImageOverride
+      - !GetAtt DoomImageOverrideValidation.ImageState
+      - !GetAtt DoomImageStack.Outputs.DoomImageState
+  DoomLatestActiveImageVersion:
+    Condition: BundleCapsule
+    Description: Latest active stack-built DOOM image version, or EXTERNAL when using an override.
+    Value: !If
+      - UseDoomImageOverride
+      - !GetAtt DoomImageOverrideValidation.LatestActiveImageVersion
+      - !GetAtt DoomImageStack.Outputs.DoomLatestActiveImageVersion
+  McpRuntimeId:
+    Description: AgentCore Runtime ID.
+    Value: !GetAtt AgentCoreStack.Outputs.McpRuntimeId
+  McpRuntimeArn:
+    Description: AgentCore Runtime ARN.
+    Value: !GetAtt AgentCoreStack.Outputs.McpRuntimeArn
+  McpEndpoint:
+    Description: The pre-encoded MCP URL to put in Codex config.toml.
+    Value: !GetAtt AgentCoreStack.Outputs.McpEndpoint
+  CodexConfigToml:
+    Description: >-
+      START HERE to connect Codex. This is the COMPLETE, ready-to-paste block for ~/.codex/config.toml
+      with your live endpoint + client id already filled in (no placeholders). Copy this entire value
+      verbatim into ~/.codex/config.toml, then run: codex mcp login pairputer
+    Value: !Sub
+      - |-
+        [mcp_servers.pairputer]
+        url = "${Endpoint}"
+        scopes = ["openid", "pairputer-mcp/invoke"]
+        [mcp_servers.pairputer.oauth]
+        client_id = "${ClientId}"
+      - Endpoint: !GetAtt AgentCoreStack.Outputs.McpEndpoint
+        ClientId: !GetAtt IdentityStack.Outputs.CodexClientId
+  CognitoDomain:
+    Description: Cognito hosted domain for OAuth.
+    Value: !GetAtt IdentityStack.Outputs.CognitoDomain
+  TokenEndpoint:
+    Description: POST client_credentials here to mint a bearer token for test calls.
+    Value: !GetAtt IdentityStack.Outputs.TokenEndpoint
+  M2MClientId:
+    Description: Cognito M2M app client id.
+    Value: !GetAtt IdentityStack.Outputs.M2MClientId
+  CodexClientId:
+    Description: Cognito public client id for Codex PKCE login.
+    Value: !GetAtt IdentityStack.Outputs.CodexClientId
+  ChatGPTClientId:
+    Description: Cognito public client id for the ChatGPT connector (Developer mode / Apps).
+    Value: !GetAtt IdentityStack.Outputs.ChatGPTClientId
+  ClaudeClientId:
+    Description: Cognito public client id for the Claude connector.
+    Value: !GetAtt IdentityStack.Outputs.ClaudeClientId
+  ChatGPTConnectorSetup:
+    Description: >-
+      Connect ChatGPT (Developer mode) — 1. Settings > Apps & Connectors > Advanced > Developer mode.
+      2. Create app - MCP server URL = the McpEndpoint output; Authentication = OAuth; client id = the
+      ChatGPTClientId output (no secret). 3. Copy the callback URL ChatGPT shows
+      (https://chatgpt.com/connector/oauth/...) and run substrate/wire-chatgpt.sh --register-callback
+      <that-url>, then Connect and sign in.
+    Value: !Sub "substrate/wire-chatgpt.sh --stack ${AWS::StackName}"
+  M2MScope:
+    Description: OAuth scope to request when minting a token.
+    Value: !GetAtt IdentityStack.Outputs.M2MScope
+  GetSecretCommand:
+    Description: Retrieve the M2M client secret out-of-band.
+    Value: !GetAtt IdentityStack.Outputs.GetSecretCommand
+  SuperAdminEmail:
+    Description: Configured first super-admin email, if any.
+    Value: !GetAtt IdentityStack.Outputs.SuperAdminEmail
+  UserPoolId:
+    Description: Cognito user pool id (deploy.sh uses it to create the super-admin + trigger the invite email).
+    Value: !GetAtt IdentityStack.Outputs.UserPoolId
+  CreateSuperAdminCommand:
+    Description: Create the configured super-admin user with a local temporary password prompt and no Cognito password email.
+    Value: !GetAtt IdentityStack.Outputs.CreateSuperAdminCommand
+  CreateSuperAdminWithoutPasswordCommand:
+    Description: Create the configured super-admin user without sending an invite email; follow with SetSuperAdminPermanentPasswordCommand.
+    Value: !GetAtt IdentityStack.Outputs.CreateSuperAdminWithoutPasswordCommand
+  SetSuperAdminPermanentPasswordCommand:
+    Description: Set a permanent password for the configured super-admin user using a local hidden prompt.
+    Value: !GetAtt IdentityStack.Outputs.SetSuperAdminPermanentPasswordCommand
+  AddSuperAdminToGroupCommand:
+    Description: Add the configured super-admin user to the SuperAdmins Cognito group.
+    Value: !GetAtt IdentityStack.Outputs.AddSuperAdminToGroupCommand
+  LoginInstructions:
+    Description: How to log in after creating the super-admin user.
+    Value: !GetAtt IdentityStack.Outputs.LoginInstructions
+  CognitoWebAclArn:
+    Description: Regional WAF WebACL associated with the Cognito user pool.
+    Value: !GetAtt IdentityStack.Outputs.CognitoWebAclArn
+  VideoRelayUrl:
+    Description: CloudFront front door for the stateful relay.
+    Value: !GetAtt RelayStack.Outputs.RelayUrl
+  CloudFrontWebAclArn:
+    Description: CloudFront-scope WAF WebACL attached to the relay distribution, or DISABLED when unavailable.
+    Value: !If
+      - UseProvidedWebAcl
+      - !Ref WebAclArn
+      - !If
+        - CreateCloudFrontWaf
+        - !GetAtt CloudFrontWafStack.Outputs.WebAclArn
+        - DISABLED
+  CloudFrontWafMode:
+    Description: How the relay CloudFront WAF is configured.
+    Value: !If
+      - UseProvidedWebAcl
+      - PROVIDED
+      - !If
+        - CreateCloudFrontWaf
+        - NESTED
+        - DISABLED
+  RelayClusterName:
+    Value: !GetAtt RelayStack.Outputs.RelayClusterName
+  RelayServiceName:
+    Value: !GetAtt RelayStack.Outputs.RelayServiceName
+  RelayTargetGroupArn:
+    Value: !GetAtt RelayStack.Outputs.RelayTargetGroupArn
+  RelayAlbDnsName:
+    Value: !GetAtt RelayStack.Outputs.RelayAlbDnsName
+  RelayVpcId:
+    Value: !GetAtt RelayNetworkStack.Outputs.ResolvedVpcId
+  RelayVpcOriginId:
+    Value: !GetAtt RelayStack.Outputs.RelayVpcOriginId
+  RelayWarmSeconds:
+    Description: Shared multi-tenant relay mode; -1 means always on.
+    Value: !GetAtt RelayStack.Outputs.RelayWarmSeconds
+  SessionTableName:
+    Description: DynamoDB table mapping authenticated Cognito principals to MicroVM sessions.
+    Value: !GetAtt SessionsStack.Outputs.SessionTableName
+  CloudFrontPublicKeyId:
+    Description: CloudFront public key id used for signed relay URLs.
+    Value: !GetAtt SecurityStack.Outputs.CloudFrontPublicKeyId
+  CloudFrontKeyGroupId:
+    Description: CloudFront key group trusted by the relay distribution.
+    Value: !GetAtt SecurityStack.Outputs.CloudFrontKeyGroupId
+  CloudFrontSigningPrivateKeySecretArn:
+    Description: Secrets Manager ARN for the private key AgentCore uses to sign relay URLs.
+    Value: !GetAtt SecurityStack.Outputs.CloudFrontSigningPrivateKeySecretArn

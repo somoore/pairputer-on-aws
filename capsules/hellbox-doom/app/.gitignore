@@ -1,0 +1,4 @@
+# Local WAD drop zone; payloads are not committed.
+*
+!.gitignore
+!README.md

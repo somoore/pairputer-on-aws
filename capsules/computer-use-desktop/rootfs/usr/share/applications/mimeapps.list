@@ -1,0 +1,35 @@
+# System-wide default MIME associations for the workbench desktop (gio/nautilus read this).
+# Chromium is the viewer for everything it renders natively — images, PDF, HTML — so a
+# double-click in Files always opens SOMETHING instead of "There is no app installed" (live-QA
+# 2026-07-13: a PNG upload was un-viewable). Text and code (css/xml/python/go/rust/terraform/…)
+# open in GNOME Text Editor; shared-mime-info subclasses every code type from text/plain, so the
+# text/plain default catches types not pinned here. VS Code (code-server) stays the human's
+# choice for real editing via the dock.
+[Default Applications]
+image/png=pairputer-browser.desktop
+image/jpeg=pairputer-browser.desktop
+image/gif=pairputer-browser.desktop
+image/webp=pairputer-browser.desktop
+image/bmp=pairputer-browser.desktop
+image/svg+xml=pairputer-browser.desktop
+image/avif=pairputer-browser.desktop
+image/x-icon=pairputer-browser.desktop
+image/tiff=pairputer-browser.desktop
+application/pdf=pairputer-browser.desktop
+text/html=pairputer-browser.desktop
+application/xhtml+xml=pairputer-browser.desktop
+text/plain=org.gnome.TextEditor.desktop
+text/css=org.gnome.TextEditor.desktop
+text/csv=org.gnome.TextEditor.desktop
+text/markdown=org.gnome.TextEditor.desktop
+text/x-python=org.gnome.TextEditor.desktop
+text/x-go=org.gnome.TextEditor.desktop
+text/rust=org.gnome.TextEditor.desktop
+text/x-csrc=org.gnome.TextEditor.desktop
+text/x-c++src=org.gnome.TextEditor.desktop
+application/xml=org.gnome.TextEditor.desktop
+text/xml=org.gnome.TextEditor.desktop
+application/json=org.gnome.TextEditor.desktop
+application/x-yaml=org.gnome.TextEditor.desktop
+application/toml=org.gnome.TextEditor.desktop
+application/x-shellscript=org.gnome.TextEditor.desktop

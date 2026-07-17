@@ -1,0 +1,2148 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pairputer</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0d;color:#e7e7ea;font:13px/1.4 ui-monospace,Menlo,monospace}
+  #bar{display:flex;gap:8px;align-items:center;padding:6px 8px;background:#111116}
+  #bar .spacer{flex:1 1 auto;min-width:8px}
+  button{background:#1f1f27;color:#e7e7ea;border:1px solid #34343e;border-radius:6px;padding:5px 10px;cursor:pointer}
+  button:disabled{opacity:.4;cursor:default}
+  #freeze{border-color:#5a3a3a} #thaw{border-color:#3a5a3a} #trash{border-color:#5a3a3a}
+  /* The live display/video metadata owns aspect ratio. 16:9 is only a neutral pre-frame placeholder;
+     no capsule resolution or game geometry is baked into this shared viewport. */
+  #wrap{position:relative;background:#000;aspect-ratio:var(--display-aspect,16/9);width:100%;max-height:92vh;min-height:360px;margin:0 auto}
+  #wrap iframe{position:absolute;inset:0;border:0;width:100%;height:100%;background:#000}
+  /* Loading cover: a polished "starting" state over the black stream window until the FIRST frame
+     paints. Removed instantly on first frame so the user never stares at an unexplained black box
+     during the ~45s scale-to-zero cold start. */
+  #loadcover{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:12px;text-align:center;padding:24px;
+    background:radial-gradient(120% 120% at 50% 40%,#151826 0%,#0b0b0d 70%);
+    color:#e7e7ea;font:13px/1.5 ui-monospace,Menlo,monospace;animation:loadfade .3s ease}
+  #loadcover[hidden]{display:none}
+  #loadring{width:46px;height:46px;border-radius:50%;
+    border:3px solid rgba(138,180,255,.18);border-top-color:#8ab4ff;animation:loadspin .9s linear infinite}
+  #loadtitle{font-size:15px;font-weight:600;letter-spacing:.2px}
+  #loadmsg{color:#9fb4e6;min-height:1.4em;transition:opacity .25s;
+    background:linear-gradient(90deg,#7f9ad6 25%,#cfe0ff 50%,#7f9ad6 75%);background-size:200% 100%;
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+    animation:loadshimmer 2.2s linear infinite}
+  #loadhint{color:#6b6b77;font-size:11px;max-width:340px}
+  @keyframes loadspin{to{transform:rotate(360deg)}}
+  @keyframes loadfade{from{opacity:0}to{opacity:1}}
+  @keyframes loadshimmer{to{background-position:-200% 0}}
+  @media (prefers-reduced-motion: reduce){#loadring,#loadmsg{animation:none}#loadmsg{-webkit-text-fill-color:#9fb4e6}}
+  body.light #loadcover{background:radial-gradient(120% 120% at 50% 40%,#eef1f8 0%,#dfe3ee 70%);color:#2a2a33}
+  body.light #loadhint{color:#8a8a95}
+  /* Co-play: whose-turn badge + Agent Cursor attribution. Capsule-agnostic. */
+  #coplay{position:absolute;top:8px;left:8px;z-index:5;display:none;align-items:center;gap:6px;
+    padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;pointer-events:none;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(4px)}
+  #coplay.human{color:#7fe0a0;box-shadow:inset 0 0 0 1px #2f6b4a}
+  #coplay.agent{color:#8ab4ff;box-shadow:inset 0 0 0 1px #33507f}
+  #wrap.agent-driving{box-shadow:inset 0 0 0 3px #4a7bd6}  /* whole frame glows blue while the agent drives */
+  /* Agent Cursor: synchronized attribution over the real logical pointer, rendered at refresh cadence. */
+  #ghostcur{position:absolute;z-index:6;display:none;pointer-events:none;transform:translate(-50%,-50%);
+    font-size:18px;filter:drop-shadow(0 0 4px #4a7bd6);will-change:left,top}
+  #ghostcur::after{content:"Agent";display:block;font-size:9px;color:#8ab4ff;text-align:center;
+    background:rgba(10,16,30,.75);border-radius:4px;padding:0 3px;margin-top:-2px}
+  #agenttarget{position:absolute;z-index:5;display:none;pointer-events:none;border:2px solid rgba(99,155,255,.9);
+    border-radius:5px;background:rgba(74,123,214,.08);box-shadow:0 0 12px rgba(74,123,214,.45)}
+  #agentripple{position:absolute;z-index:5;display:none;pointer-events:none;width:12px;height:12px;
+    border:2px solid #8ab4ff;border-radius:50%;transform:translate(-50%,-50%);animation:agent-ripple .36s ease-out}
+  @keyframes agent-ripple{from{opacity:1;scale:.4}to{opacity:0;scale:2.2}}
+  @media (prefers-reduced-motion:reduce){#agentripple{animation-duration:.12s}}
+  /* Theatre of work: live feed of what the agent is doing, bottom-right over the game. */
+  #coplayfeed{position:absolute;right:8px;bottom:8px;z-index:5;display:none;max-width:60%;
+    pointer-events:none;font-size:11px;line-height:1.5;text-align:right}
+  #coplayfeed .fx{display:inline-block;margin-top:3px;padding:2px 8px;border-radius:6px;color:#cfe0ff;
+    background:rgba(20,30,55,.72);backdrop-filter:blur(4px);box-shadow:inset 0 0 0 1px #33507f}
+  .pill{padding:2px 8px;border-radius:999px;font-size:11px}
+  .run{background:#16351c;color:#7fe0a0}.susp{background:#3a2416;color:#e0a87f}.start{background:#26262c;color:#ffd24a}.unk{background:#26262c;color:#9a9aa2}
+  #status{padding:4px 8px;color:#9a9aa2;font-size:11px;white-space:pre;overflow:hidden;text-overflow:ellipsis;background:#111116}
+  #capsulehelp{padding:0 8px 6px;color:#c4c4ca;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#111116}
+  #frozenpane{position:absolute;inset:0;z-index:9;display:flex;align-items:center;justify-content:center;background:#0b0b0d;color:#e0a87f;font:14px ui-monospace,monospace}
+  #trashpane,#launchpane{position:absolute;inset:0;z-index:12;display:flex;align-items:center;justify-content:center;background:rgba(11,11,13,.92);font:13px/1.4 ui-monospace,Menlo,monospace}
+  #trashpane .box,#launchpane .box{display:flex;flex-direction:column;gap:10px;max-width:420px;padding:16px;border:1px solid #34343e;background:#111116}
+  #trashpane .actions,#launchpane .actions{display:flex;gap:8px;flex-wrap:wrap}
+  #trashpane .danger{border-color:#8a3b3b;color:#ffb0a8}
+  #trashpane .primary,#launchpane .primary{border-color:#3a5a3a;color:#9ff0aa}
+  body.local-viewer{display:flex;flex-direction:column;overflow:hidden}
+  body.local-viewer #bar,body.local-viewer #status,body.local-viewer #capsulehelp{display:none}
+  /* Expanded (fullscreen) fill: hosts give us a tall panel (ChatGPT desktop docks a right-side
+     panel). Keep #wrap at the VIDEO aspect-ratio and CENTER it in the available space rather than
+     stretching it to the panel shape — otherwise the canvas letterboxes INTERNALLY (object-fit) and
+     the mouse-coordinate mapping has to track a video rect that isn't the element rect, which drifts
+     in fullscreen (cursor hits an invisible wall short of the right edge). With the wrap pinned to the
+     video aspect, the canvas fills it exactly and getBoundingClientRect == the true video rect. */
+  body.expanded{display:flex;flex-direction:column;height:100vh;margin:0}
+  body.expanded #wrap{flex:1 1 auto;aspect-ratio:var(--display-aspect,16/9);max-height:none;
+    min-height:0;width:auto;max-width:100%;margin:auto;align-self:center}
+  body.expanded #bar,body.expanded #status,body.expanded #capsulehelp{flex:0 0 auto}
+  /* Light host theme: keep the game black, lighten the chrome. */
+  body.light #bar,body.light #status,body.light #capsulehelp{background:#ececf1}
+  body.light #status{color:#565662}
+  body.light #capsulehelp{color:#3a3a44}
+  body.local-viewer #wrap{aspect-ratio:auto;flex:1 1 auto;width:100%;height:100vh;max-height:none}
+  /* Files drawer: durable per-tenant storage (persistent_storage tool) — works with NO VM running. */
+  #filespane{background:#141419;border-bottom:1px solid #26262e;padding:8px 10px;font-size:12px;color:#c9c9d1}
+  #filespane[hidden]{display:none}
+  #filespane .fhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  #filespane .fhead .hint{color:#8a8a95;font-size:11px;flex:1}
+  #filesdrop{border:1px dashed #3a3a46;border-radius:6px;padding:8px;text-align:center;color:#8a8a95;
+             font-size:11px;margin-bottom:6px;transition:border-color .15s,background .15s}
+  #filesdrop.over{border-color:#8ab4ff;background:rgba(138,180,255,.08);color:#c9d7f5}
+  #fileslist{max-height:180px;overflow-y:auto}
+  #fileslist .frow{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:4px}
+  #fileslist .frow:hover{background:#1d1d25}
+  #fileslist .fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #fileslist .fsize{color:#8a8a95;font-size:11px;min-width:56px;text-align:right}
+  #fileslist .frow button{padding:1px 6px;font-size:11px}
+  #filesstatus{color:#8a8a95;font-size:11px;margin-top:4px;min-height:14px}
+  #settingspane{background:#141419;border-bottom:1px solid #26262e;padding:8px 10px;font-size:12px;color:#c9c9d1}
+  #settingspane[hidden]{display:none}
+  #settingspane .fhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  #settingspane .fhead .hint{color:#8a8a95;font-size:11px;flex:1}
+  #settingspane .srow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0}
+  #settingspane .srow .hint{color:#8a8a95;font-size:11px}
+  #settingspane select{background:#1d1d25;color:#c9c9d1;border:1px solid #3a3a46;border-radius:4px;padding:2px 6px}
+  #usagerow{margin-top:6px;padding-top:6px;border-top:1px solid #26262e;color:#9fb4e6;font-size:12px}
+  #usagerow[hidden]{display:none}
+  body.light #usagerow{color:#4a5a7a;border-color:#ddd}
+  #settingsstatus{margin-top:4px;min-height:14px}
+  body.light #filespane,body.light #settingspane{background:#f4f4f8;color:#3a3a44;border-color:#ddd}
+  body.light #settingspane select{background:#fff;color:#3a3a44;border-color:#ccc}
+  body.light #fileslist .frow:hover{background:#e8e8ee}
+</style>
+
+<div id="bar">
+  <span id="state" class="pill unk">loading</span>
+  <button id="freeze" disabled>❄ Freeze</button>
+  <button id="thaw" disabled>🔥 Thaw</button>
+  <button id="trash" disabled>🗑 Trash</button>
+  <span class="spacer"></span>
+  <button id="filesbtn">📁 Files</button>
+  <button id="full">⛶ Fullscreen</button>
+  <button id="mute">🔊 Sound</button>
+  <button id="settingsbtn">⚙</button>
+</div>
+<div id="settingspane" hidden>
+  <div class="fhead"><strong>Settings</strong><span class="hint">applies to this capsule</span></div>
+  <label class="srow">Capsule
+    <select id="setcapsule"><option value="">(loading…)</option></select>
+  </label>
+  <label class="srow" id="setairgaprow" hidden>
+    <span>Air-gap <span class="hint">block all internet from the box</span></span>
+    <input id="setairgap" type="checkbox">
+  </label>
+  <label class="srow" id="setidlerow" hidden>
+    <span>Auto-suspend <span class="hint">pause the box when idle (billing pauses)</span></span>
+    <select id="setidle"></select>
+  </label>
+  <div id="usagerow" hidden>💤 <span id="usageline">—</span></div>
+  <div id="settingsstatus" class="hint"></div>
+</div>
+<div id="filespane" hidden>
+  <div class="fhead">
+    <strong>Durable storage</strong>
+    <span class="hint">workspace/persistent/ — survives freeze &amp; trash; no VM needed</span>
+    <button id="filesupload">＋ Upload</button>
+    <button id="filesrefresh">↻</button>
+  </div>
+  <div id="filesdrop">drop a file here (≤ 8 MB) — it lands in the VM's persistent folder</div>
+  <div id="fileslist"></div>
+  <div id="filesstatus"></div>
+  <input id="filesinput" type="file" hidden>
+</div>
+<div id="wrap"><div id="coplay"></div><div id="coplayfeed"></div><div id="agenttarget"></div><div id="agentripple"></div><div id="ghostcur">⌁</div>
+  <div id="loadcover" hidden>
+    <div id="loadring"></div>
+    <div id="loadtitle">Starting your capsule</div>
+    <div id="loadmsg">warming up the relay…</div>
+    <div id="loadhint">first launch after idle can take ~45s — the stream appears the moment it's ready</div>
+  </div>
+</div>
+<div id="status">loading…</div>
+<div id="capsulehelp"></div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const setStatus = s => { $('status').textContent = s; };
+
+// --- Loading cover: a friendly "starting" state over the stream window until the FIRST frame paints.
+// Removed the instant a real frame arrives, so a ~45s scale-to-zero cold start never reads as a broken
+// black box. Cross-player: the direct player calls firstFrame() from its decoder; the iframe path calls
+// it when FPS first goes > 0 (see the message/status handlers).
+const LOAD_STAGES = [
+  'warming up the relay…',
+  'booting your capsule…',
+  'connecting the video stream…',
+  'almost there — waiting for the first frame…',
+];
+let loadStageTimer = null, loadStageIdx = 0, gotFirstFrame = false;
+function showLoadCover(show, opts) {
+  const cover = document.getElementById('loadcover');
+  if (!cover) return;
+  if (show) {
+    if (!cover.hidden && loadStageTimer) return;   // idempotent: already showing, don't restart the cycle
+    gotFirstFrame = false;
+    cover.hidden = false;
+    if (opts && opts.title) document.getElementById('loadtitle').textContent = opts.title;
+    loadStageIdx = 0;
+    const msg = document.getElementById('loadmsg');
+    if (msg) msg.textContent = LOAD_STAGES[0];
+    if (loadStageTimer) clearInterval(loadStageTimer);
+    // Advance through the staged messages; hold on the last one until the frame lands.
+    loadStageTimer = setInterval(() => {
+      loadStageIdx = Math.min(loadStageIdx + 1, LOAD_STAGES.length - 1);
+      const m = document.getElementById('loadmsg');
+      if (m) m.textContent = LOAD_STAGES[loadStageIdx];
+    }, 6000);
+  } else {
+    cover.hidden = true;
+    if (loadStageTimer) { clearInterval(loadStageTimer); loadStageTimer = null; }
+  }
+}
+function firstFrame() {
+  if (gotFirstFrame) return;
+  gotFirstFrame = true;
+  showLoadCover(false);   // reveal the live stream
+}
+// Backend-agnostic player helpers: route to the direct in-widget player (Claude) or the iframe
+// player (Codex/ChatGPT). directPlayer/playerFrame are declared below; these read them lazily.
+function playerActive() { return !!(directPlayer || (playerFrame && playerFrame.contentWindow)); }
+function playerMessageOrigin() {
+  try { return playerFrame && playerFrame.src ? new URL(playerFrame.src, location.href).origin : '';
+  } catch { return ''; }
+}
+function postToPlayer(message) {
+  const origin = playerMessageOrigin();
+  if (playerFrame && playerFrame.contentWindow && origin) {
+    playerFrame.contentWindow.postMessage(message, origin);
+  }
+}
+function sendPlayerCmd(cmd, payload = {}) {
+  if (directPlayer) { directPlayer.rpc(cmd, payload); return; }
+  postToPlayer(Object.assign({ cmd }, payload));
+}
+function sendPlayerInput(i) {
+  if (directPlayer) { directPlayer.sendInput(i); return; }
+  postToPlayer({ pairputerInput: i });
+}
+// Called by the direct player when its SSE 403s (expired CloudFront edgeAuth): re-mint the session
+// (callTool works post-handshake) and push the fresh token/edgeAuth back into the direct player.
+async function directRefresh() {
+  await refreshSession({ reason: 'stream 403' });
+  sendPlayerCmd('setToken', { token, edgeAuth });
+}
+const setCapsuleHelp = s => {
+  const el = $('capsulehelp');
+  if (el) el.textContent = s || '';
+};
+
+const host = (() => {
+  let seq = 0;
+  const pending = new Map();
+  const usesOpenAi = () => window.openai && typeof window.openai.callTool === 'function';
+  // Standard MCP Apps bridge (SEP-1865): the host REFUSES to reveal the app — and warns
+  // "received 'tools/call' before ui/notifications/initialized" — if any tools/call goes out
+  // before the ui/initialize -> ui/notifications/initialized handshake has completed. So every
+  // standard-bridge tools/call awaits this gate. openai-family hosts (Codex/ChatGPT) don't use it
+  // (they route through window.openai.callTool), so the gate resolves immediately there.
+  let handshakeDone;
+  const handshake = new Promise(res => { handshakeDone = res; });
+  window.addEventListener('message', ev => {
+    if (ev.source !== parent) return;
+    const m = ev.data;
+    if (!m || m.jsonrpc !== '2.0') return;
+    if (m.id != null && pending.has(m.id)) {
+      pending.get(m.id)(m.result ?? m.error);
+      pending.delete(m.id);
+      return;
+    }
+    // MCP Apps standard bridge (SEP-1865): hosts without window.openai (Claude) deliver tool data as
+    // ui/* notifications. Stash them so readToolData() finds the session payload.
+    if (m.method === 'ui/notifications/tool-result' || m.method === 'ui/notifications/tool-input') {
+      uiBridgeData = (m.params && (m.params.result ?? m.params)) || uiBridgeData;
+    }
+    // Host context changed (theme/displayMode/availableDisplayModes) — the standard's live-update
+    // channel (analogous to openai:set_globals). Forward to the widget's handler.
+    if (m.method === 'ui/notifications/host-context-changed' && m.params && typeof onHostContext === 'function') {
+      onHostContext(m.params);
+    }
+  });
+  const call = (method, params) => new Promise(res => {
+    const id = 'h' + (++seq);
+    pending.set(id, res);
+    parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+  const notify = (method, params) => parent.postMessage({ jsonrpc: '2.0', method, params: params || {} }, '*');
+  const callTool = async (name, args) => {
+    if (usesOpenAi()) {
+      return await window.openai.callTool(name, args || {});
+    }
+    await handshake;  // never emit tools/call before the standard handshake completes
+    return await call('tools/call', { name, arguments: args || {} });
+  };
+  // MCP Apps (SEP-1865) lifecycle, matching the official ext-apps App.connect() exactly: send
+  // ui/initialize with {appCapabilities, appInfo, protocolVersion} — the key is appInfo, NOT
+  // clientInfo; a strict host schema rejects the wrong key and the iframe stays veiled forever
+  // (observed on claude.ai) — then ui/notifications/initialized, then size-changed so the host
+  // can size/reveal the container (the SDK's autoResize behavior). Open the tools/call gate only
+  // AFTER initialized is delivered (+ a tick for the host to process it).
+  const initialize = async () => {
+    if (usesOpenAi()) { handshakeDone(); return null; }  // openai hosts: no ui/* handshake
+    const r = await call('ui/initialize', {
+      appCapabilities: {},
+      appInfo: { name: 'pairputer-widget', version: '1.0.0' },
+      protocolVersion: '2026-01-26',
+    });
+    notify('ui/notifications/initialized');
+    const sendSize = () => notify('ui/notifications/size-changed', {
+      width: document.documentElement.scrollWidth,
+      height: Math.max(document.documentElement.scrollHeight, 420),
+    });
+    sendSize();
+    try { new ResizeObserver(() => requestAnimationFrame(sendSize)).observe(document.documentElement); } catch {}
+    await new Promise(r => setTimeout(r, 50));  // let the host process 'initialized' before tools/call
+    handshakeDone();
+    return r;
+  };
+  return {
+    initialize,
+    usesOpenAi,
+    // requestDisplayMode resolves to the GRANTED mode, which can differ from the request (e.g. the host
+    // coerces pip->fullscreen on mobile, or ignores it entirely on hosts like Codex that only do inline).
+    // Always read the returned value and render from it. (OpenAI Apps SDK.)
+    requestDisplayMode: async mode => {
+      try {
+        if (window.openai && typeof window.openai.requestDisplayMode === 'function') {
+          const r = await window.openai.requestDisplayMode({ mode });
+          return (r && r.mode) || mode;
+        }
+        const r = await call('ui/request-display-mode', { mode });
+        return (r && r.mode) || mode;
+      } catch { return 'inline'; }
+    },
+    getDisplayMode: () => (window.openai && window.openai.displayMode) || 'inline',
+    setWidgetState: s => { try { window.openai && window.openai.setWidgetState && window.openai.setWidgetState(s); } catch {} },
+    getWidgetState: () => { try { return (window.openai && window.openai.widgetState) || null; } catch { return null; } },
+    callTool,
+  };
+})();
+
+function toolStruct(r) {
+  if (!r) return null;
+  const direct = r.structuredContent || r.toolOutput
+    || (r.result && (r.result.structuredContent || r.result.toolOutput));
+  if (direct && (direct.relayUrl || direct.token)) return direct;
+  const content = r.content || (r.result && r.result.content)
+    || (r.toolOutput && r.toolOutput.content);
+  if (Array.isArray(content)) {
+    for (const c of content) {
+      if (c && typeof c.text === 'string') {
+        try {
+          const j = JSON.parse(c.text);
+          if (j && (j.relayUrl || j.token)) return j;
+        } catch {}
+      }
+    }
+  }
+  return direct || null;
+}
+
+let uiBridgeData = null;  // tool data delivered over the standard ui/* bridge (non-openai hosts)
+
+function readToolData() {
+  const o = window.openai || {};
+  const candidates = [o.toolOutput, o.toolResponseMetadata, o.toolInput, uiBridgeData].filter(Boolean);
+  for (const c of candidates) {
+    const sc = toolStruct(c) || c;
+    if (sc && (sc.relayUrl || sc.token)) return sc;
+  }
+  return null;
+}
+
+function decodeB64Url(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  return atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+}
+
+function tokenExpMs(tok) {
+  if (!tok || tok.indexOf('.') < 0) return 0;
+  try {
+    const first = decodeB64Url(tok.split('.')[0]);
+    let exp = Number.parseInt(first, 10);
+    if (!Number.isFinite(exp)) {
+      const payload = JSON.parse(first);
+      exp = Number.parseInt(payload.exp, 10);
+    }
+    return Number.isFinite(exp) ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const RELAY = '__RELAY_ORIGIN__';
+const RELAY_VIEWER_ID = crypto.randomUUID ? crypto.randomUUID()
+  : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+// Per-host reconnect UX: every session payload carries reconnectCommand/reconnectHint/host from the
+// server's host profile (hosts/). The Codex strings are only the pre-payload defaults.
+let RECONNECT_COMMAND = 'codex mcp login pairputer';
+let RECONNECT_HINT = 'pairputer connection expired. Run: ' + RECONNECT_COMMAND;
+let hostId = 'codex';
+const REFRESH_SKEW_MS = 5 * 60 * 1000;
+let relay = RELAY;
+let base = '';
+let token = '';
+let edgeAuth = '';
+let viewer = '';   // LOCAL MODE: a self-contained noVNC viewer URL to load directly (no relay/player page)
+let refreshTimer = null;
+let refreshInflight = null;
+let lastNeedTokenAt = 0;   // debounce iframe-player 403 re-mint requests
+let frozen = false;
+let stopped = false;
+let starting = false;
+// Deliberate lifecycle intent — the single source of truth for "should this VM be running?".
+// Persisted so a widget remount (host turn / display-mode change) can't silently re-launch a VM the
+// user froze or trashed. EVERY auto-recovery path (stall watchdog, self-heal, needtoken, boot,
+// pollers) checks canAutoWake(); only explicit user Freeze/Thaw/Trash/Launch gestures change intent.
+function setIntent(next) {   // 'running' | 'frozen' | 'stopped'
+  try { localStorage.setItem(storageKey('intent'), next); } catch {}
+}
+function getIntent() {
+  try { return localStorage.getItem(storageKey('intent')) || ''; } catch { return ''; }
+}
+// True only when the user intends the VM running — gates automatic waking/streaming recovery.
+function canAutoWake() { return getIntent() === 'running' && !frozen && !stopped; }
+let muted = false;
+let playerFrame = null;
+let playerReady = null;
+let playerReadyResolve = null;
+let directPlayer = null;   // in-widget player for hosts that block nested iframes (Claude)
+let useDirectPlayer = false;  // set from the host profile's streamMode
+let rpcSeq = 0;
+let openNonce = '';
+// Empty until a session payload names the capsule — the SERVER resolves "" to the sole/default
+// registered capsule. Never hardcode a capsule id here (a widget that boots without a play payload,
+// e.g. ChatGPT rendering from a state read, would poison every explicit call with the wrong id).
+let imageId = '';
+let capsuleHelp = '';
+const playerPending = new Map();
+const parentHeld = new Set();
+
+function storageKey(name) {
+  return 'pairputer_' + name + ':' + imageId;
+}
+
+// A successful play_capsule call carries a unique nonce. Hosts may later remount the widget and
+// replay that exact tool output, so freshness—not merely the presence of a play payload—is what
+// proves the human/model explicitly opened the capsule again.
+function isFreshExplicitOpen(session, lastOpenNonce) {
+  const nonce = String(session && session.openNonce || '');
+  return !!(session && nonce && nonce !== String(lastOpenNonce || ''));
+}
+
+function applySession(sc) {
+  if (!sc) return;
+  if (sc.reconnectCommand) RECONNECT_COMMAND = String(sc.reconnectCommand);
+  if (sc.reconnectHint) RECONNECT_HINT = String(sc.reconnectHint);
+  if (sc.host) hostId = String(sc.host);
+  // MERGE, don't overwrite: the host's ui/initialize hostContext.availableDisplayModes (Claude) may
+  // have already populated hostDisplayModes before the session payload lands. Assigning here would
+  // wipe Claude's fullscreen mode (its sc.displayModes is empty).
+  if (Array.isArray(sc.displayModes)) mergeHostModes(sc.displayModes);
+  if (sc.streamMode) useDirectPlayer = sc.streamMode === 'direct';
+  if ('imageId' in sc && sc.imageId) imageId = String(sc.imageId);
+  if (sc.capsule) applyCapsuleMetadata(sc.capsule);
+  if (sc.viewerUrl) viewer = String(sc.viewerUrl);   // local mode: load the capsule player directly
+  document.body.classList.toggle('local-viewer', !!viewer);
+  if (sc.relayUrl) relay = sc.relayUrl;
+  if (sc.openNonce) openNonce = String(sc.openNonce);
+  if (relay) base = relay.replace(/\/$/, '');
+  if ('token' in sc) token = sc.token || '';
+  if ('edgeAuth' in sc) edgeAuth = sc.edgeAuth || '';
+  if (sc.state === 'STOPPED') {
+    token = '';
+    edgeAuth = '';
+  }
+  if (token) scheduleRefresh();
+  if (playerActive()) sendPlayerCmd('setToken', { token, edgeAuth });
+  showReconnectOverlay(false);
+  // A session payload can itself be the first authoritative observation after a remount. Apply
+  // its inactive state immediately rather than waiting for a player request that the relay will
+  // (correctly) reject while suspended.
+  if (isInactiveVmState(sc.state)) reconcileInactiveSession(sc);
+}
+
+function isInactiveVmState(state) {
+  return ['SUSPENDED', 'STOPPED', 'TERMINATED', 'FAILED'].includes(String(state || '').toUpperCase());
+}
+
+// The relay must reject data-plane requests to a suspended VM so a stale player cannot wake it and
+// restart billing. That means a relay `/state` failure is not proof that the VM is still running.
+// Reconcile those failures through pairputer_session, which is authenticated control-plane state and
+// deliberately does not resume the VM when ensure_running is false.
+function reconcileInactiveSession(sc) {
+  const state = String(sc && sc.state || '').toUpperCase();
+  if (!isInactiveVmState(state)) return false;
+  starting = false;
+  stopped = state === 'STOPPED' || state === 'TERMINATED' || state === 'FAILED';
+  frozen = !stopped;
+  token = '';
+  edgeAuth = '';
+  setIntent(stopped ? 'stopped' : 'frozen');
+  try {
+    if (stopped) localStorage.removeItem(storageKey('frozen'));
+    else localStorage.setItem(storageKey('frozen'), '1');
+  } catch {}
+  renderUI();
+  removePlayer();
+  setStatus(stopped ? 'stopped — click Launch to start fresh' : 'suspended — click Thaw to resume');
+  return true;
+}
+
+function applyCapsuleMetadata(meta) {
+  if (!meta) return;
+  const prompts = Array.isArray(meta.suggestedPrompts) ? meta.suggestedPrompts.filter(Boolean).slice(0, 3) : [];
+  const promptText = prompts.length ? ' Try: ' + prompts.map(p => '"' + String(p) + '"').join(' · ') : '';
+  capsuleHelp = String(meta.humanHelpText || '').trim() || promptText.trim();
+  if (capsuleHelp && promptText && !capsuleHelp.includes(prompts[0])) capsuleHelp += promptText;
+  setCapsuleHelp(capsuleHelp);
+  if (meta.display) updateDisplayMetadata(meta.display);
+}
+
+// --- Generic co-play/event presentation ------------------------------------------------------------
+// Live display metadata is authoritative. The encoded frame owns letterboxing; logical dimensions own
+// pointer coordinates. Older capsules omit it, so decoded video dimensions provide a safe fallback.
+let coplayTimer = null;
+let coplayEvents = null;
+let coplayFallbackTimer = null;
+let lastCoplayState = null;
+let cursorRaf = null;
+let activeCursorSequence = null;
+let lastReceiptSequence = null;
+let displayMetadata = {
+  displayRevision: null, logicalWidth: 0, logicalHeight: 0,
+  encodedWidth: 0, encodedHeight: 0, deviceScale: 1, rotation: 0
+};
+
+const numeric = (...values) => {
+  for (const value of values) { const n = Number(value); if (Number.isFinite(n) && n > 0) return n; }
+  return 0;
+};
+
+function updateDisplayMetadata(raw) {
+  if (!raw || typeof raw !== 'object') return;
+  const next = Object.assign({}, displayMetadata, {
+    displayRevision: raw.displayRevision ?? raw.display_revision ?? displayMetadata.displayRevision,
+    logicalWidth: numeric(raw.logicalWidth, raw.logical_width, displayMetadata.logicalWidth),
+    logicalHeight: numeric(raw.logicalHeight, raw.logical_height, displayMetadata.logicalHeight),
+    encodedWidth: numeric(raw.encodedWidth, raw.encoded_width, displayMetadata.encodedWidth),
+    encodedHeight: numeric(raw.encodedHeight, raw.encoded_height, displayMetadata.encodedHeight),
+    deviceScale: numeric(raw.deviceScale, raw.device_scale, displayMetadata.deviceScale, 1),
+    rotation: Number(raw.rotation ?? displayMetadata.rotation ?? 0),
+    observedAt: raw.observedAt ?? raw.observed_at ?? displayMetadata.observedAt,
+  });
+  if (!next.logicalWidth) next.logicalWidth = next.encodedWidth;
+  if (!next.logicalHeight) next.logicalHeight = next.encodedHeight;
+  if (!next.encodedWidth) next.encodedWidth = next.logicalWidth;
+  if (!next.encodedHeight) next.encodedHeight = next.logicalHeight;
+  displayMetadata = next;
+  if (next.encodedWidth && next.encodedHeight) {
+    $('wrap').style.setProperty('--display-aspect', next.encodedWidth + '/' + next.encodedHeight);
+  }
+}
+
+function updateVideoMetadata(width, height) {
+  updateDisplayMetadata({ encodedWidth: width, encodedHeight: height,
+    logicalWidth: displayMetadata.logicalWidth || width, logicalHeight: displayMetadata.logicalHeight || height });
+}
+
+function renderRect() {
+  const wrap = $('wrap'), ww = wrap ? wrap.clientWidth : 0, wh = wrap ? wrap.clientHeight : 0;
+  const ew = displayMetadata.encodedWidth || displayMetadata.logicalWidth || ww || 1;
+  const eh = displayMetadata.encodedHeight || displayMetadata.logicalHeight || wh || 1;
+  const scale = Math.min(ww / ew, wh / eh);
+  const width = ew * scale, height = eh * scale;
+  return { left: (ww - width) / 2, top: (wh - height) / 2, width, height };
+}
+
+function logicalPoint(x, y) {
+  const r = renderRect();
+  const lw = displayMetadata.logicalWidth || displayMetadata.encodedWidth || 1;
+  const lh = displayMetadata.logicalHeight || displayMetadata.encodedHeight || 1;
+  return { x: r.left + Math.max(0, Math.min(lw, Number(x) || 0)) / lw * r.width,
+    y: r.top + Math.max(0, Math.min(lh, Number(y) || 0)) / lh * r.height };
+}
+
+function revisionMatches(value) {
+  return value == null || displayMetadata.displayRevision == null ||
+    String(value) === String(displayMetadata.displayRevision);
+}
+
+function placeAgentCursor(x, y) {
+  const gc = $('ghostcur'), p = logicalPoint(x, y);
+  if (!gc) return;
+  gc.style.display = 'block'; gc.style.left = p.x + 'px'; gc.style.top = p.y + 'px';
+}
+
+function planPoint(plan, progress) {
+  const start = { x: Number(plan.startX ?? plan.start_x ?? 0), y: Number(plan.startY ?? plan.start_y ?? 0) };
+  const target = { x: Number(plan.targetX ?? plan.target_x ?? start.x), y: Number(plan.targetY ?? plan.target_y ?? start.y) };
+  const cps = plan.controlPoints || plan.control_points || [];
+  if (cps.length >= 2) {
+    const p1 = Array.isArray(cps[0]) ? { x: +cps[0][0], y: +cps[0][1] } : { x: +cps[0].x, y: +cps[0].y };
+    const p2 = Array.isArray(cps[1]) ? { x: +cps[1][0], y: +cps[1][1] } : { x: +cps[1].x, y: +cps[1].y };
+    const u = 1 - progress;
+    return { x: u*u*u*start.x + 3*u*u*progress*p1.x + 3*u*progress*progress*p2.x + progress*progress*progress*target.x,
+      y: u*u*u*start.y + 3*u*u*progress*p1.y + 3*u*progress*progress*p2.y + progress*progress*progress*target.y };
+  }
+  return { x: start.x + (target.x - start.x) * progress, y: start.y + (target.y - start.y) * progress };
+}
+
+function renderTargetBounds(plan) {
+  const target = $('agenttarget');
+  const b = plan && (plan.targetBounds || plan.target_bounds);
+  if (!target || !b || !revisionMatches(plan.displayRevision ?? plan.display_revision)) {
+    if (target) target.style.display = 'none'; return;
+  }
+  const x = b.x ?? b.left, y = b.y ?? b.top;
+  const x2 = b.right ?? (Number(x) + Number(b.width || 0));
+  const y2 = b.bottom ?? (Number(y) + Number(b.height || 0));
+  const p1 = logicalPoint(x, y), p2 = logicalPoint(x2, y2);
+  target.style.display = 'block'; target.style.left = p1.x + 'px'; target.style.top = p1.y + 'px';
+  target.style.width = Math.max(2, p2.x - p1.x) + 'px'; target.style.height = Math.max(2, p2.y - p1.y) + 'px';
+}
+
+function animateCursorPlan(plan) {
+  const sequence = plan.sequence ?? plan.seq;
+  if (sequence == null || sequence === activeCursorSequence ||
+      !revisionMatches(plan.displayRevision ?? plan.display_revision)) return;
+  activeCursorSequence = sequence;
+  if (cursorRaf) cancelAnimationFrame(cursorRaf);
+  renderTargetBounds(plan);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = Math.max(1, reduced ? Math.min(90, Number(plan.durationMs ?? plan.duration_ms ?? 1))
+    : Number(plan.durationMs ?? plan.duration_ms ?? 250));
+  const rawStart = plan.startsAt ?? plan.starts_at;
+  const parsedStart = typeof rawStart === 'string' ? Date.parse(rawStart) : Number(rawStart);
+  const startsAt = Number.isFinite(parsedStart) ? (parsedStart < 1e12 ? parsedStart * 1000 : parsedStart) : Date.now();
+  const frame = () => {
+    const t = Math.max(0, Math.min(1, (Date.now() - startsAt) / duration));
+    const smooth = reduced ? t : t*t*(3 - 2*t);
+    const p = planPoint(plan, smooth); placeAgentCursor(p.x, p.y);
+    if (t < 1) cursorRaf = requestAnimationFrame(frame); else cursorRaf = null;
+  };
+  cursorRaf = requestAnimationFrame(frame);
+}
+
+function renderReceipt(receipt) {
+  const seq = receipt && (receipt.sequence ?? receipt.seq);
+  if (!receipt || !receipt.accepted || seq == null || seq === lastReceiptSequence) return;
+  lastReceiptSequence = seq;
+  const x = receipt.actualCursorX ?? receipt.actual_cursor_x;
+  const y = receipt.actualCursorY ?? receipt.actual_cursor_y;
+  if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return;
+  const ripple = $('agentripple'), p = logicalPoint(x, y);
+  ripple.style.display = 'none'; ripple.offsetWidth; // restart animation only for an accepted receipt
+  ripple.style.left = p.x + 'px'; ripple.style.top = p.y + 'px'; ripple.style.display = 'block';
+}
+
+function renderCoplay(state) {
+  lastCoplayState = state;
+  const el = $('coplay');
+  const feedEl = $('coplayfeed');
+  const wrap = $('wrap');
+  if (!el || !wrap) return;
+  const owner = state && state.owner;
+  wrap.classList.toggle('agent-driving', owner === 'agent');
+  if (owner === 'agent') {
+    el.style.display = 'flex'; el.className = 'agent'; el.textContent = '🤖 Agent is driving';
+  } else if (owner === 'human') {
+    el.style.display = 'flex'; el.className = 'human'; el.textContent = '🎮 You are driving';
+  } else {
+    el.style.display = 'none';
+  }
+  updateDisplayMetadata(state && (state.displayMetadata || state.display_metadata || state.display));
+  const events = state && Array.isArray(state.events) ? state.events : [];
+  for (const event of events.slice(-16)) {
+    const kind = event && (event.type || event.kind);
+    if (kind === 'display' || kind === 'display_metadata') updateDisplayMetadata(event.display || event.payload || event);
+  }
+  const cursorEvent = events.slice().reverse().find(e => e && ['cursor_plan', 'cursorPlan'].includes(e.type || e.kind));
+  const receiptEvent = events.slice().reverse().find(e => e && ['input_receipt', 'inputReceipt'].includes(e.type || e.kind));
+  const plan = state && (state.cursorPlan || state.cursor_plan) || (cursorEvent && (cursorEvent.plan || cursorEvent.payload || cursorEvent));
+  if (plan) animateCursorPlan(plan);
+  renderReceipt(state && (state.inputReceipt || state.input_receipt) ||
+    (receiptEvent && (receiptEvent.receipt || receiptEvent.payload || receiptEvent)));
+  // Older capsules publish only the last acknowledged logical point. It uses the same dynamic transform.
+  const gc = $('ghostcur');
+  const cur = state && (state.agentCursor || state.agent_cursor);
+  if (gc && !plan) {
+    if (cur && cur.ageMs < 4000 && revisionMatches(cur.displayRevision ?? cur.display_revision)) placeAgentCursor(cur.x, cur.y);
+    else gc.style.display = 'none';
+  }
+  // Theatre of work: the agent's recent actions, so the human SEES what it's doing.
+  const feed = (state && state.feed) || events.filter(e => e && (e.label || e.intent || e.method));
+  if (feedEl) {
+    if (!feed.length) { feedEl.style.display = 'none'; feedEl.innerHTML = ''; }
+    else {
+      feedEl.style.display = 'block';
+      feedEl.innerHTML = feed.slice(-4).map(f => {
+        const actor = f.actor === 'human' ? 'You' : 'Agent';
+        const method = f.presentationMethod || f.presentation_method || f.method;
+        const line = actor + ': ' + String(f.label || f.intent || '') + (method ? ' · ' + method : '');
+        return '<div class="fx">' + line.replace(/[<>&]/g, '') + '</div>';
+      }).join('');
+    }
+  }
+}
+
+function coplayUrl(path) {
+  const sep = base.includes('?') ? '&' : '?';
+  return base.replace(/\/$/, '') + path + sep + 't=' + encodeURIComponent(token) +
+    '&viewer=' + encodeURIComponent(RELAY_VIEWER_ID) +
+    (edgeAuth ? '&' + edgeAuth : '');
+}
+
+function startCoplayPollFallback() {
+  if (coplayTimer) return;
+  const tick = async () => {
+    if (!base || !token) return;
+    try { const r = await fetch(coplayUrl('/coplay'), { cache: 'no-store' });
+      if (r.status === 409 || r.status === 400) {
+        if (coplayTimer) { clearInterval(coplayTimer); coplayTimer = null; }
+        return;
+      }
+      if (r.ok) renderCoplay(await r.json());
+    } catch { /* transient — keep polling */ }
+  };
+  coplayTimer = setInterval(tick, 400);
+  tick();
+}
+
+function startCoplayPolling() {
+  if (coplayEvents || coplayTimer || !base || !token) return;
+  if (!('EventSource' in window)) { startCoplayPollFallback(); return; }
+  try {
+    coplayEvents = new EventSource(coplayUrl('/events'));
+    const onState = ev => { try { renderCoplay(JSON.parse(ev.data)); } catch {} };
+    coplayEvents.onmessage = onState;
+    coplayEvents.addEventListener('state', onState);
+    coplayEvents.onopen = () => {
+      if (coplayFallbackTimer) { clearTimeout(coplayFallbackTimer); coplayFallbackTimer = null; }
+      if (coplayTimer) { clearInterval(coplayTimer); coplayTimer = null; }
+    };
+    coplayEvents.onerror = () => {
+      try { coplayEvents && coplayEvents.close(); } catch {}
+      coplayEvents = null;
+      startCoplayPollFallback();
+    };
+    coplayFallbackTimer = setTimeout(startCoplayPollFallback, 1500);
+  } catch { coplayEvents = null; startCoplayPollFallback(); }
+}
+function stopCoplayPolling() {
+  if (coplayTimer) { clearInterval(coplayTimer); coplayTimer = null; }
+  if (coplayEvents) { try { coplayEvents.close(); } catch {} coplayEvents = null; }
+  if (coplayFallbackTimer) { clearTimeout(coplayFallbackTimer); coplayFallbackTimer = null; }
+  if (cursorRaf) { cancelAnimationFrame(cursorRaf); cursorRaf = null; }
+  activeCursorSequence = null;
+  if ($('agenttarget')) $('agenttarget').style.display = 'none';
+  if ($('agentripple')) $('agentripple').style.display = 'none';
+  renderCoplay(null);
+}
+
+if ('ResizeObserver' in window) {
+  new ResizeObserver(() => { if (lastCoplayState) renderCoplay(lastCoplayState); }).observe($('wrap'));
+} else {
+  addEventListener('resize', () => { if (lastCoplayState) renderCoplay(lastCoplayState); });
+}
+
+function tokenIsExpiring(skewMs = REFRESH_SKEW_MS) {
+  const exp = tokenExpMs(token);
+  return !token || (exp > 0 && exp - Date.now() < skewMs);
+}
+
+function scheduleRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const exp = tokenExpMs(token);
+  if (!exp) return;
+  const delay = Math.max(30 * 1000, exp - Date.now() - REFRESH_SKEW_MS);
+  refreshTimer = setTimeout(() => {
+    refreshSession({ reason: 'timer' }).catch(e => setStatus('token refresh: ' + reconnectMessage(e)));
+  }, delay);
+}
+
+async function refreshSession({ reason = 'manual', ensureRunning = false, requireToken = true } = {}) {
+  if (refreshInflight) return refreshInflight;
+  // Safety net: never let a stray/in-flight ensureRunning wake a VM the user stopped or froze.
+  // Only the explicit Thaw/Launch gestures (which set intent to 'running' first) may wake it.
+  if (ensureRunning && getIntent() && getIntent() !== 'running') ensureRunning = false;
+  refreshInflight = (async () => {
+    let r;
+    try {
+      r = await host.callTool('pairputer_session', { image_id: imageId, ensure_running: !!ensureRunning });
+    } catch (e) {
+      if (isAuthError(e)) showReconnectOverlay(true, reconnectMessage(e));
+      throw e;
+    }
+    const sc = toolStruct(r) || r;
+    if (r && r.error) {
+      if (isAuthError(r.error)) showReconnectOverlay(true, reconnectMessage(r.error));
+      throw new Error(formatError(r.error));
+    }
+    // An inactive session is a successful, non-waking answer. Do this before the recovery launch
+    // path: a suspended VM intentionally has no usable player token and must show Thaw, never loop.
+    if (sc && isInactiveVmState(sc.state)) {
+      applySession(sc);
+      return sc;
+    }
+    // No session came back — the VM's epoch moved out from under this widget (e.g. a second
+    // play_capsule in the same turn rotated it, or the VM aged out). If this widget's intent is
+    // still 'running' and we haven't already tried, recover by launching once instead of showing a
+    // dead "returned no session" card. Guarded so it never wakes a VM the user deliberately froze/stopped.
+    if ((!sc || (!sc.token && !sc.relayUrl)) && !ensureRunning && canAutoWake()) {
+      const rec = await host.callTool('pairputer_session', { image_id: imageId, ensure_running: true });
+      const rsc = toolStruct(rec) || rec;
+      if (rsc && isInactiveVmState(rsc.state)) { applySession(rsc); return rsc; }
+      if (rsc && (rsc.token || rsc.relayUrl)) { applySession(rsc); if (!base) throw new Error('no relay URL'); return rsc; }
+    }
+    if (!sc || (!sc.token && !sc.relayUrl)) throw new Error('pairputer_session returned no session');
+    applySession(sc);
+    if (!base) throw new Error('no relay URL');
+    if (!token && requireToken) throw new Error('no relay token');
+    if (reason !== 'timer') setStatus('session refreshed');
+    return sc;
+  })().finally(() => { refreshInflight = null; });
+  return refreshInflight;
+}
+
+async function ensureFreshSession({ reason = 'use', ensureRunning = false, skewMs = REFRESH_SKEW_MS } = {}) {
+  if (!base || tokenIsExpiring(skewMs)) {
+    return await refreshSession({ reason, ensureRunning });
+  }
+  return null;
+}
+
+function formatError(e) {
+  if (!e) return '';
+  if (typeof e === 'string') return e;
+  if (e.message) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+function isAuthError(e) {
+  return /401|unauthorized|invalid[_ -]?token|oauth|login|auth|expired|forbidden/i.test(formatError(e));
+}
+
+function reconnectMessage(e) {
+  const detail = formatError(e);
+  return detail ? RECONNECT_HINT + ' (' + detail + ')' : RECONNECT_HINT;
+}
+
+function showReconnectOverlay(show, message = RECONNECT_HINT) {
+  let o = document.getElementById('reconnectpane');
+  if (show && !o) {
+    o = document.createElement('div');
+    o.id = 'reconnectpane';
+    o.style.cssText = 'position:absolute;inset:0;z-index:11;display:flex;align-items:center;'
+      + 'justify-content:center;padding:18px;background:#0b0b0d;color:#ffd24a;'
+      + 'font:14px/1.5 ui-monospace,monospace;text-align:center';
+    $('wrap').appendChild(o);
+  }
+  if (show && o) {
+    o.textContent = '';
+    const box = document.createElement('div');
+    box.style.cssText = 'max-width:680px;display:flex;flex-direction:column;gap:10px;align-items:center';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:15px;color:#ffd24a';
+    title.textContent = 'pairputer session expired';
+    const body = document.createElement('div');
+    body.style.cssText = 'color:#e0a87f;white-space:pre-wrap';
+    body.textContent = message;
+    const code = document.createElement('code');
+    code.style.cssText = 'display:block;user-select:text;background:#1a1a1f;color:#e7e7ea;'
+      + 'border:1px solid #34343e;border-radius:6px;padding:8px 10px';
+    code.textContent = RECONNECT_COMMAND;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy login command';
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(RECONNECT_COMMAND);
+        copy.textContent = 'Copied';
+        setStatus('copied: ' + RECONNECT_COMMAND);
+      } catch {
+        copy.textContent = 'Select command above';
+        setStatus(RECONNECT_COMMAND);
+      }
+    };
+    const note = document.createElement('div');
+    note.style.cssText = 'color:#9a9aa2;font-size:12px';
+    note.textContent = hostId === 'codex' ? 'Run it in a terminal, then reopen pairputer.'
+                                          : 'Then reopen pairputer.';
+    box.append(title, body, code, copy, note);
+    o.appendChild(box);
+  }
+  if (!show && o) o.remove();
+}
+
+function showFrozenOverlay(show, message) {
+  // LOCAL MODE has no MicroVM lifecycle (always running) — never show freeze/billing overlays.
+  if (viewer) show = false;
+  let o = document.getElementById('frozenpane');
+  if (show && !o) {
+    o = document.createElement('div');
+    o.id = 'frozenpane';
+    $('wrap').appendChild(o);
+  }
+  if (show && o) {
+    o.textContent = message || '❄ SUSPENDED — billing paused. Click 🔥 Thaw to resume.';
+  } else if (!show && o) {
+    o.remove();
+  }
+}
+
+function renderUI() {
+  const el = $('state');
+  if (starting) {
+    el.className = 'pill start';
+    el.textContent = 'STARTING · warming relay';
+    $('freeze').disabled = true;
+    $('thaw').disabled = true;
+    $('trash').disabled = true;
+    showFrozenOverlay(false);
+    showLoadCover(true);   // beautiful "starting" state over the stream until the first frame paints
+  } else if (stopped) {
+    el.className = 'pill unk';
+    el.textContent = 'STOPPED · no microvm';
+    $('freeze').disabled = true;
+    $('thaw').disabled = false;
+    $('trash').disabled = false;
+    showFrozenOverlay(true, '🗑 TERMINATED — no MicroVM is mapped. Click 🔥 Launch to start fresh.');
+    showLoadCover(false);
+  } else if (frozen) {
+    el.className = 'pill susp';
+    el.textContent = 'SUSPENDED · billing paused';
+    $('freeze').disabled = true;
+    $('thaw').disabled = false;
+    $('trash').disabled = false;
+    showFrozenOverlay(true);
+    showLoadCover(false);
+  } else {
+    el.className = 'pill run';
+    el.textContent = 'RUNNING · billing on';
+    $('freeze').disabled = false;
+    $('thaw').disabled = true;
+    $('trash').disabled = false;
+    showFrozenOverlay(false);
+    // RUNNING but no frame yet (post-scale-up / reconnect): keep the cover until firstFrame() fires.
+    if (!gotFirstFrame) showLoadCover(true);
+  }
+  $('thaw').textContent = stopped ? '🔥 Launch' : '🔥 Thaw';
+  $('mute').textContent = muted ? '🔇 Muted' : '🔊 Sound';
+}
+
+function playerUrl() {
+  // LOCAL MODE: the capsule serves a complete noVNC player itself — load it directly, no relay/token.
+  if (viewer) return viewer;
+  const qs = new URLSearchParams();
+  qs.set('autostart', '0');
+  qs.set('t', token);
+  qs.set('viewer', RELAY_VIEWER_ID);
+  if (edgeAuth) {
+    const edge = new URLSearchParams(edgeAuth);
+    edge.forEach((v, k) => qs.set(k, v));
+  }
+  return base + '/player?' + qs.toString();
+}
+
+// --- Direct-connect player (for hosts that don't allow a nested iframe, e.g. Claude, whose sandbox
+// permits the relay in connect-src but NOT frame-src). Runs the SAME decode/input engine as the
+// relay's player page, but IN THE WIDGET's own DOM — the relay's video/audio SSE and POST /input are
+// CORS-open (access-control-allow-origin: *), so the widget connects directly with no iframe. The
+// exposed rpc()/sendInput()/releaseAll()/remove() surface mirrors the iframe player so playerRpc and
+// friends work uniformly. Video needs WebCodecs (Chromium/Claude Desktop-Electron/modern browsers).
+function makeDirectPlayer() {
+  const wrap = $('wrap');
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280; canvas.height = 720; canvas.tabIndex = 0;
+  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;background:#000';
+  wrap.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  let vidW = 1280, vidH = 720, lastFrameAt = 0, started = false;
+  updateVideoMetadata(vidW, vidH);
+  let vdec = null, adec = null, ves = null, aes = null, statusTimer = null;
+  let audioCtx = null, audioGain = null;
+  let localMuted = muted, curToken = token, curEdge = edgeAuth;
+  const held = new Set(), buttons = new Set();
+
+  const signedQuery = () => {
+    const q = new URLSearchParams(); q.set('t', curToken); q.set('viewer', RELAY_VIEWER_ID);
+    if (curEdge) new URLSearchParams(curEdge).forEach((v, k) => q.set(k, v));
+    return q.toString();
+  };
+  const U = p => base + p + (p.indexOf('?') < 0 ? '?' : '&') + signedQuery();
+
+  // input: batched HTTPS POST (same transport as the iframe player; wss:// is blocked on widget CSP)
+  let inputQueue = [], inputTimer = null, inputInflight = false;
+  const flush = () => {
+    inputTimer = null;
+    if (!inputQueue.length || inputInflight) return;
+    const batch = inputQueue; inputQueue = []; inputInflight = true;
+    fetch(U('/input'), { method: 'POST', body: JSON.stringify(batch), cache: 'no-store' })
+      .catch(() => {}).finally(() => { inputInflight = false; if (inputQueue.length) sched(); });
+  };
+  const sched = () => { if (!inputTimer) inputTimer = setTimeout(flush, 16); };
+  const send = o => { if (!started) return; inputQueue.push(o); if (inputQueue.length > 32) inputQueue.shift(); sched(); };
+
+  // SSE self-heal: EventSource can't read HTTP status, but an expired CloudFront edgeAuth makes /video
+  // 403 at the edge and onerror fires with no bytes ever received. Ask the widget to re-mint the
+  // session (callTool → applySession posts a fresh setToken), then reopen — rate-limited.
+  let gotBytes = false, lastReconnect = 0;
+  const selfHeal = () => {
+    if (gotBytes) return;                 // real stream that hiccuped — EventSource auto-reconnects
+    const now = Date.now(); if (now - lastReconnect < 8000) return; lastReconnect = now;
+    if (typeof directRefresh === 'function') directRefresh().then(() => {
+      // curToken/curEdge were updated via setToken rpc; reopen the streams with fresh signed params.
+      try { ves && ves.close(); } catch {} try { aes && aes.close(); } catch {}
+      ves = aes = null; startVideo(); startAudio();
+    }).catch(() => {});
+  };
+  const startVideo = () => {
+    if (vdec || !('VideoDecoder' in window)) { if (!('VideoDecoder' in window)) setStatus('this host lacks WebCodecs — video needs Chromium/Electron'); return; }
+    let frames = 0, lastFrames = 0, sawKey = false, vts = 0, lastTick = performance.now();
+    vdec = new VideoDecoder({
+      output: f => { const w = f.displayWidth || f.codedWidth, h = f.displayHeight || f.codedHeight;
+        if (w && h && (vidW !== w || canvas.width !== w)) {
+          vidW = w; vidH = h; canvas.width = w; canvas.height = h; updateVideoMetadata(w, h);
+        }
+        ctx.drawImage(f, 0, 0, canvas.width, canvas.height); f.close(); frames++; lastFrameAt = performance.now();
+        if (frames === 1) firstFrame(); },   // first painted frame -> drop the loading cover
+      error: () => {} });
+    try { vdec.configure({ codec: 'avc1.42E01F', optimizeForLatency: true, hardwareAcceleration: 'no-preference' }); } catch {}
+    ves = new EventSource(U('/video'));
+    ves.onopen = () => setStatus('connected — waiting for keyframe');
+    ves.onerror = () => { setStatus('FPS 0 · connection terrible · reconnecting'); selfHeal(); };
+    ves.onmessage = ev => { gotBytes = true; const raw = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0)), key = raw[0] === 1, au = raw.subarray(1);
+      if (vdec.state !== 'configured') return; if (!sawKey) { if (!key) return; sawKey = true; }
+      try { vdec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: vts, data: au })); } catch {} vts += 33333; };
+    if (statusTimer) clearInterval(statusTimer);
+    statusTimer = setInterval(() => {
+      const now = performance.now(), dt = Math.max(1, now - lastTick), fps = (frames - lastFrames) * 1000 / dt;
+      lastTick = now; lastFrames = frames;
+      const stale = lastFrameAt && now - lastFrameAt > 3000;
+      const conn = stale ? 'terrible' : fps >= 28 ? 'excellent' : fps >= 24 ? 'good' : fps >= 18 ? 'okay' : fps >= 10 ? 'bad' : 'terrible';
+      if (frames) { const line = 'FPS ' + fps.toFixed(1) + ' · connection ' + conn; setStatus(line); watchForStall(line); }
+    }, 1000);
+  };
+  const startAudio = () => {
+    if (aes || !('AudioDecoder' in window)) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    audioGain = audioCtx.createGain(); audioGain.gain.value = localMuted ? 0 : 1; audioGain.connect(audioCtx.destination);
+    let nextTime = 0, configured = false, ats = 0;
+    adec = new AudioDecoder({
+      output: ad => { const ch = ad.numberOfChannels, n = ad.numberOfFrames, sr = ad.sampleRate;
+        const buf = audioCtx.createBuffer(ch, n, sr);
+        for (let c = 0; c < ch; c++) { const tt = new Float32Array(n); ad.copyTo(tt, { planeIndex: c, format: 'f32-planar' }); buf.copyToChannel(tt, c); } ad.close();
+        nextTime = Math.max(audioCtx.currentTime, nextTime); if (nextTime - audioCtx.currentTime > 0.2) nextTime = audioCtx.currentTime;
+        const sx = audioCtx.createBufferSource(); sx.buffer = buf; sx.connect(audioGain); sx.start(nextTime); nextTime += buf.duration; },
+      error: () => {} });
+    const isHead = b => b.length >= 8 && b[0] === 0x4f && b[1] === 0x70 && b[2] === 0x75 && b[3] === 0x73;
+    aes = new EventSource(U('/audio'));
+    aes.onmessage = ev => { const b = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
+      if (isHead(b)) { if (!configured) { adec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: b[9] || 2 }); configured = true; } return; }
+      if (!configured) { adec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 }); configured = true; }
+      if (adec.state !== 'configured') return; try { adec.decode(new EncodedAudioChunk({ type: 'key', timestamp: ats, data: b })); } catch {} ats += 20000; };
+  };
+  const releaseAll = () => {
+    for (const k of held) send({ t: 'k', down: false, key: k }); held.clear();
+    for (const b of buttons) send({ t: 'b', button: b, down: false }); buttons.clear();
+  };
+  const stopStreams = () => {
+    releaseAll();
+    try { ves && ves.close(); } catch {} try { aes && aes.close(); } catch {}
+    try { vdec && vdec.close(); } catch {} try { adec && adec.close(); } catch {}
+    try { audioCtx && audioCtx.close && audioCtx.close(); } catch {}
+    if (statusTimer) clearInterval(statusTimer);
+    ves = aes = vdec = adec = null; statusTimer = null; audioCtx = null; audioGain = null; started = false;
+  };
+  const startStreams = () => { if (started) return; started = true; startVideo(); startAudio(); canvas.focus(); };
+
+  // input listeners (canvas-scoped mouse; window-scoped key/blur — the widget owns the whole frame)
+  let mmLast = 0, mmPending = null;
+  const onMove = e => { const box = canvas.getBoundingClientRect(), scale = Math.min(box.width / vidW, box.height / vidH);
+    const rw = vidW * scale, rh = vidH * scale, left = box.left + (box.width - rw) / 2, top = box.top + (box.height - rh) / 2;
+    mmPending = { t: 'm', x: Math.max(0, Math.min(vidW - 1, (e.clientX - left) / rw * vidW | 0)), y: Math.max(0, Math.min(vidH - 1, (e.clientY - top) / rh * vidH | 0)) };
+    const now = performance.now(); if (now - mmLast >= 50) { mmLast = now; send(mmPending); mmPending = null; } };
+  const mmInterval = setInterval(() => { if (mmPending) { mmLast = performance.now(); send(mmPending); mmPending = null; } }, 50);
+  canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('mousedown', e => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); canvas.focus(); buttons.add(e.button); send({ t: 'b', button: e.button, down: true }); e.preventDefault(); });
+  canvas.addEventListener('mouseup', e => { if (buttons.delete(e.button)) send({ t: 'b', button: e.button, down: false }); e.preventDefault(); });
+  const winUp = e => { if (buttons.delete(e.button)) send({ t: 'b', button: e.button, down: false }); };
+  const winBlur = () => releaseAll();
+  const onVis = () => { if (document.hidden) releaseAll(); };
+  window.addEventListener('mouseup', winUp);
+  window.addEventListener('blur', winBlur);
+  document.addEventListener('visibilitychange', onVis);
+  canvas.addEventListener('mouseleave', e => { if (e.buttons === 0) releaseAll(); });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  return {
+    kind: 'direct',
+    canvas,
+    rpc(cmd, payload) {
+      if (cmd === 'setToken') { curToken = payload.token || curToken; curEdge = payload.edgeAuth || curEdge; return Promise.resolve({}); }
+      if (cmd === 'setMuted') { localMuted = !!payload.muted; if (audioGain) audioGain.gain.value = localMuted ? 0 : 1; if (!localMuted && audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); return Promise.resolve({}); }
+      if (cmd === 'releaseAll') { releaseAll(); return Promise.resolve({ released: true }); }
+      if (cmd === 'stop') { stopStreams(); return Promise.resolve({ stopped: true }); }
+      if (cmd === 'start') { if (typeof payload.muted === 'boolean') localMuted = payload.muted; startStreams(); return Promise.resolve({ started: true }); }
+      if (cmd === 'thaw') { if (typeof payload.muted === 'boolean') localMuted = payload.muted; startStreams(); return Promise.resolve({ state: 'RUNNING' }); }
+      if (cmd === 'freeze') { stopStreams(); return jsonFetchDirect('/drain'); }
+      if (cmd === 'state') { return jsonFetchDirect('/state'); }
+      return Promise.resolve({});
+    },
+    sendInput(i) {
+      if (i.t === 'k') { if (i.down) { if (!held.has(i.key)) { held.add(i.key); send(i); } } else if (held.delete(i.key)) send(i); }
+      else if (i.t === 'b') { if (i.down) { buttons.add(i.button); send(i); } else if (buttons.delete(i.button)) send(i); }
+      else send(i);
+    },
+    releaseAll,
+    remove() {
+      stopStreams(); clearInterval(mmInterval);
+      window.removeEventListener('mouseup', winUp); window.removeEventListener('blur', winBlur);
+      document.removeEventListener('visibilitychange', onVis);
+      try { canvas.remove(); } catch {}
+    },
+  };
+  function jsonFetchDirect(p) {
+    return fetch(U(p), { cache: 'no-store' }).then(async r => { const t = await r.text(); let b = {}; try { b = t ? JSON.parse(t) : {}; } catch {} if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (b.error || t || r.statusText)); return b; });
+  }
+}
+
+// --- Display mode / PiP (Apps SDK), as an OPT-IN enhancement over the known-good inline default.
+// Inline (what ships to end users today, proven) is the fallback and the default — we never force a mode.
+// The layout collision (the game scrolls off-screen as the chat grows while you prompt the agent) is
+// optionally solved by PiP: a floating window pinned over the conversation, meant for "live sessions like
+// games or videos". A PiP toggle used to request it (removed); the host returns the GRANTED mode (may
+// be fullscreen on mobile, or stay inline on hosts like Codex that only do inline — in which case we're
+// exactly where we are today, no worse). Persistence: the widget can remount across turns/mode changes,
+// so we snapshot enough to resume the same session from setWidgetState.
+let displayMode = host.getDisplayMode();   // never REQUEST a mode at boot (no gesture) — accept the host's
+// Modes the host grants beyond inline. Two sources, merged: (a) the host profile's streamMode-adjacent
+// displayModes in the session payload (openai hosts, where we know the answer), and (b) the MCP Apps
+// standard's hostContext.availableDisplayModes from the ui/initialize result (Claude — the AUTHORITATIVE
+// source per the spec; Claude advertises inline+fullscreen, not pip today; if it ever adds pip, the
+// button appears automatically). Capability-driven, never host-sniffed.
+let hostDisplayModes = [];
+function mergeHostModes(modes) {
+  if (!Array.isArray(modes)) return;
+  for (const m of modes) { const s = String(m); if (s !== 'inline' && !hostDisplayModes.includes(s)) hostDisplayModes.push(s); }
+  updateModeButton();
+}
+// Standard-bridge host-context-changed handler (Claude): theme/displayMode/availableDisplayModes can
+// change mid-session (fullscreen ⇄ inline, dark ⇄ light). Keep chrome + mode buttons accurate.
+function onHostContext(hc) {
+  if (!hc) return;
+  if (hc.displayMode && hc.displayMode !== displayMode) { displayMode = hc.displayMode; updateModeButton(); persistState(); }
+  if (hc.theme) document.body.classList.toggle('light', hc.theme === 'light');
+  mergeHostModes(hc.availableDisplayModes);
+  applyHostLayout();
+}
+function persistState() {
+  host.setWidgetState({ imageId, openNonce, mode: displayMode, ts: Date.now() });
+}
+async function setMode(mode) {
+  const granted = await host.requestDisplayMode(mode);  // may differ (mobile/host coercion) or be inline
+  displayMode = granted;
+  updateModeButton();
+  applyHostLayout();
+  persistState();
+  return granted;
+}
+// Mode buttons are HOST-GATED: rendered only for modes the host profile declares (payload
+// displayModes). Codex declares none → no dead PiP/Fullscreen buttons; ChatGPT declares both.
+// Labels always render from the GRANTED mode, so a coerced request stays truthful.
+function updateModeButton() {
+  const full = $('full');
+  if (full) {
+    // ALWAYS offer fullscreen: prefer the host's display mode; where the host doesn't advertise it
+    // (observed: the combined ChatGPT/Codex app hid the button entirely and the desktop was
+    // unreadably small), fall back to the browser's element-fullscreen API on our own document.
+    full.textContent = (displayMode === 'fullscreen' || document.fullscreenElement)
+      ? '⇲ Inline' : '⛶ Fullscreen';
+  }
+}
+// Chrome + host constraints per the CURRENT mode: the host theme may be light, and host chrome
+// (notches, the desktop panel's close ✕) is padded off our bar. Reads window.openai when present.
+function applyHostLayout() {
+  document.body.classList.toggle('expanded', displayMode === 'fullscreen');
+  const o = window.openai || {};
+  // Only the openai bridge exposes theme here; the standard bridge sets it via onHostContext, so
+  // don't clobber it when window.openai is absent (Claude).
+  if (window.openai && o.theme) document.body.classList.toggle('light', o.theme === 'light');
+  // Keep host chrome (e.g. the desktop panel's close ✕, notches) off our bar: pad by safeArea insets.
+  const ins = (o.safeArea && (o.safeArea.insets || o.safeArea)) || {};
+  const bar = $('bar');
+  if (bar) {
+    bar.style.paddingRight = Number.isFinite(ins.right) && ins.right > 0 ? (ins.right + 8) + 'px' : '';
+    bar.style.paddingTop = Number.isFinite(ins.top) && ins.top > 0 ? (ins.top + 4) + 'px' : '';
+  }
+}
+// React to host display-mode/theme/size changes (openai:set_globals) so chrome stays accurate —
+// including transitions that REMOUNT the widget (Android bug): boot re-reads getDisplayMode().
+window.addEventListener('openai:set_globals', () => {
+  const m = host.getDisplayMode();
+  if (m && m !== displayMode) { displayMode = m; updateModeButton(); persistState(); }
+  applyHostLayout();
+});
+
+function ensurePlayer() {
+  if (!base) return Promise.reject(new Error('no relay URL'));
+  if (!token && !viewer) return Promise.reject(new Error('no relay token'));
+  // Direct-connect host (Claude): run the engine in-widget, no iframe. Streams start on the 'start'
+  // rpc, so ensurePlayer just guarantees the engine exists and resolves immediately.
+  if (useDirectPlayer && !viewer) {
+    if (!directPlayer) { directPlayer = makeDirectPlayer(); startCoplayPolling(); persistState(); }
+    return Promise.resolve();
+  }
+  if (playerFrame && playerReady) return playerReady;
+
+  const f = document.createElement('iframe');
+  f.id = 'player';
+  f.src = playerUrl();
+  f.allow = 'autoplay; fullscreen';
+  $('wrap').appendChild(f);
+  playerFrame = f;
+  if (!viewer) startCoplayPolling();  // local capsule player owns its own chrome/audio/video UI
+  persistState();        // snapshot so a remount (turn/mode change) can resume this session
+  if (viewer) {
+    // Local capsule player connects itself and sends no 'ready' postMessage — resolve on iframe load.
+    playerReady = new Promise((resolve) => { f.addEventListener('load', () => resolve(), { once: true }); });
+    return playerReady;
+  }
+  playerReady = new Promise((resolve, reject) => {
+    // 6s: if the iframe never posts 'booted', the host likely blocks frame-src (Claude shows Chrome's
+    // "content is blocked" placeholder). Auto-fall-back to the in-widget direct player — this recovers
+    // even if the host profile's streamMode didn't reach us or a stale widget render slipped through.
+    const bootTimer = setTimeout(() => {
+      if (playerFrame === f) removePlayer();
+      if (!useDirectPlayer && !viewer) {
+        useDirectPlayer = true;
+        setStatus('iframe blocked — switching to direct stream…');
+        ensurePlayer().then(() => directPlayer && directPlayer.rpc('start', { muted })).then(resolve, reject);
+        return;
+      }
+      reject(new Error('player boot timeout'));
+    }, 6000);
+    playerReadyResolve = () => {
+      clearTimeout(bootTimer);
+      resolve();
+    };
+  });
+  return playerReady;
+}
+
+function removePlayer(delayMs = 0) {
+  if (directPlayer) {
+    stopCoplayPolling();
+    parentHeld.clear();
+    const d = directPlayer; directPlayer = null;
+    try { d.remove(); } catch {}
+    return;
+  }
+  if (!playerFrame) return;
+  stopCoplayPolling();
+  const f = playerFrame;
+  releaseAllToPlayer();
+  try { postToPlayer({ cmd: 'stop' }); } catch {}
+  playerFrame = null;
+  playerReady = null;
+  playerReadyResolve = null;
+  setTimeout(() => { try { f.remove(); } catch {} }, delayMs);
+}
+
+function releaseAllToPlayer() {
+  if (directPlayer) { for (const key of parentHeld) directPlayer.sendInput({ t: 'k', down: false, key }); parentHeld.clear(); directPlayer.releaseAll(); return; }
+  if (!playerFrame || !playerFrame.contentWindow) {
+    parentHeld.clear();
+    return;
+  }
+  for (const key of parentHeld) {
+    postToPlayer({ pairputerInput: { t: 'k', down: false, key } });
+  }
+  parentHeld.clear();
+  postToPlayer({ cmd: 'releaseAll' });
+}
+
+function playerRpc(cmd, payload = {}, timeoutMs = 15000) {
+  return ensurePlayer().then(() => {
+    if (directPlayer) return directPlayer.rpc(cmd, payload);
+    return new Promise((resolve, reject) => {
+      const id = 'p' + (++rpcSeq);
+      const timer = setTimeout(() => {
+        playerPending.delete(id);
+        reject(new Error(cmd + ' timeout'));
+      }, timeoutMs);
+      playerPending.set(id, { resolve, reject, timer });
+      postToPlayer(Object.assign({ cmd, id }, payload));
+    });
+  });
+}
+
+function isRefreshableError(e) {
+  return /403|401|forbidden|session token|required|expired|Failed to fetch|no vm|HTTP 503/i.test(formatError(e));
+}
+
+async function playerRpcWithRefresh(cmd, payload = {}, opts = {}) {
+  try {
+    await ensureFreshSession({ reason: cmd, ensureRunning: !!opts.ensureRunning, skewMs: opts.skewMs || REFRESH_SKEW_MS });
+    return await playerRpc(cmd, payload, opts.timeoutMs || 15000);
+  } catch (e) {
+    if (!isRefreshableError(e)) throw e;
+    await refreshSession({ reason: cmd + ' retry', ensureRunning: !!opts.ensureRunning });
+    return await playerRpc(cmd, payload, opts.timeoutMs || 15000);
+  }
+}
+
+async function callToolStructured(name, args = {}) {
+  const r = await host.callTool(name, args);
+  if (r && r.error) throw new Error(formatError(r.error));
+  return toolStruct(r) || r;
+}
+
+// --- Files drawer: durable per-tenant storage via the persistent_storage platform tool. ------------
+// Deliberately independent of VM state — its whole point is working when the capsule is frozen or
+// trashed. Uploads take BOTH paths: drag-and-drop onto the drop zone AND a file picker (hosts may
+// intercept window-level drops for chat attachments, the picker always works).
+const filesUi = (() => {
+  const pane = $('filespane'), list = $('fileslist'), drop = $('filesdrop'), fstatus = $('filesstatus');
+  const MAX_UPLOAD = 8 * 1024 * 1024;
+  // Loud, honest feedback: errors in red, successes in green — a silent drawer reads as broken
+  // (observed live: a host dropped the widget's tool call and the only clue was this line).
+  const say = (s, kind) => {
+    fstatus.textContent = s || '';
+    fstatus.style.color = kind === 'err' ? '#ff8a8a' : kind === 'ok' ? '#7fe0a0' : '';
+    if (kind === 'err') console.warn('[pairputer files]', s);
+  };
+  // persistent_storage returns a plain dict — structuredContent when the host surfaces it, else the
+  // JSON text block. (toolStruct is play-payload-specific, so parse locally.)
+  const parse = r => {
+    const direct = (r && (r.structuredContent || r.toolOutput
+      || (r.result && (r.result.structuredContent || r.result.toolOutput))));
+    if (direct && direct.action) return direct;
+    const content = (r && (r.content || (r.result && r.result.content))) || [];
+    for (const c of content) {
+      if (c && c.type === 'text' && typeof c.text === 'string') {
+        try { const v = JSON.parse(c.text); if (v && v.action) return v; } catch {}
+      }
+    }
+    if (r && r.action) return r;
+    throw new Error('unexpected persistent_storage response');
+  };
+  const storage = async args => {
+    // A host that silently drops widget tool calls would leave "uploading…" forever — time out loudly.
+    const call = host.callTool('persistent_storage', Object.assign({ image_id: imageId }, args));
+    const timeout = new Promise((_, rej) => setTimeout(
+      () => rej(new Error('no response from the host after 30s — this host may block widget tool calls; ask the assistant in chat to use persistent_storage instead')), 30000));
+    return parse(await Promise.race([call, timeout]));
+  };
+  const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB'
+    : n >= 1024 ? (n / 1024).toFixed(0) + ' KB' : n + ' B';
+
+  async function refresh() {
+    say('loading…');
+    try {
+      const r = await storage({ action: 'list' });
+      list.textContent = '';
+      for (const e of r.entries || []) {
+        const row = document.createElement('div'); row.className = 'frow';
+        const name = document.createElement('span'); name.className = 'fname';
+        name.textContent = e.path; name.title = `${e.path} — ${e.modified || ''}`;
+        const size = document.createElement('span'); size.className = 'fsize';
+        size.textContent = fmtSize(e.size || 0);
+        const dl = document.createElement('button'); dl.textContent = '⬇'; dl.title = 'Download';
+        dl.onclick = () => download(e.path);
+        const del = document.createElement('button'); del.textContent = '✕'; del.title = 'Delete';
+        del.onclick = () => remove(e.path);
+        row.append(name, size, dl, del); list.append(row);
+      }
+      say((r.entries || []).length
+        ? (r.liveVmRunning ? 'showing last snapshot — the live VM may hold newer files (freeze syncs)' : '')
+        : 'empty — drop a file here or save into workspace/persistent/ in the VM');
+    } catch (e) { say('list failed: ' + (e.message || e), 'err'); }
+  }
+
+  async function download(path) {
+    say(`downloading ${path}…`);
+    try {
+      const r = await storage({ action: 'read', path });
+      const bytes = Uint8Array.from(atob(r.content_base64 || ''), ch => ch.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes]));
+      const a = document.createElement('a');
+      a.href = url; a.download = path.split('/').pop() || 'file';
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      say(`downloaded ${path} (${fmtSize(bytes.length)})`, 'ok');
+    } catch (e) { say('download failed (host sandbox may block downloads): ' + (e.message || e), 'err'); }
+  }
+
+  async function remove(path) {
+    say(`deleting ${path}…`);
+    try { await storage({ action: 'delete', path }); await refresh(); say(`deleted ${path}`, 'ok'); }
+    catch (e) { say('delete failed: ' + (e.message || e), 'err'); }
+  }
+
+  async function upload(file) {
+    if (!file) return;
+    if (file.size > MAX_UPLOAD) { say(`${file.name} is over the 8 MB per-file limit`, 'err'); return; }
+    say(`uploading ${file.name}…`);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = ''; const CHUNK = 0x8000;
+      for (let i = 0; i < buf.length; i += CHUNK) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+      const safe = (file.name || 'upload.bin').replace(/[^\w .()+-]+/g, '_');
+      const r = await storage({ action: 'write', path: safe, content_base64: btoa(bin) });
+      await refresh();
+      // Message reflects what ACTUALLY happened. wroteLiveVm=true → it's in the running desktop's
+      // workspace/persistent/ right now. false with a running VM → the live push was rejected (tell
+      // the user to look, it may still be there); no VM → durable-only until launch.
+      if (r.wroteLiveVm) say(`✓ ${safe} is in the desktop now — open Files → workspace → persistent`, 'ok');
+      else if (r.liveVmRunning) say(`✓ ${safe} saved to durable storage; syncing into the running desktop…`, 'ok');
+      else say(`✓ ${safe} saved to durable storage — it appears when you Launch or Thaw the desktop`, 'ok');
+    } catch (e) { say('upload failed: ' + (e.message || e), 'err'); }
+  }
+
+  $('filesbtn').onclick = () => {
+    pane.hidden = !pane.hidden;
+    if (!pane.hidden) refresh();
+  };
+  $('filesrefresh').onclick = refresh;
+  $('filesupload').onclick = () => $('filesinput').click();
+  $('filesinput').onchange = e => { upload(e.target.files && e.target.files[0]); e.target.value = ''; };
+  drop.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); drop.classList.remove('over');
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) upload(f); else say('no file in that drop — try the ＋ Upload button');
+  });
+  return { refresh };
+})();
+
+// Universal settings menu: capsule switch (Workbench⇄DOOM), air-gap toggle, memory tier. Works on
+// every capsule; rows that don't apply (air-gap on non-workbench, memory on single-tier) hide
+// themselves. Kept to ONE gear button to avoid toolbar bloat.
+const settingsUi = (() => {
+  const pane = $('settingspane'), sel = $('setcapsule'), agRow = $('setairgaprow'),
+        agBox = $('setairgap'), sstat = $('settingsstatus');
+  let busy = false;
+  const say = (s, kind) => {
+    sstat.textContent = s || '';
+    sstat.style.color = kind === 'err' ? '#ff8a8a' : kind === 'ok' ? '#7fe0a0' : '#8a8a95';
+  };
+  // Extract a plain dict result from any host-call shape (mirrors filesUi.parse, key-agnostic).
+  const dictOf = r => {
+    const d = r && (r.structuredContent || r.toolOutput
+      || (r.result && (r.result.structuredContent || r.result.toolOutput)));
+    if (d && typeof d === 'object') return d;
+    const content = (r && (r.content || (r.result && r.result.content))) || [];
+    for (const c of content) if (c && c.type === 'text') { try { return JSON.parse(c.text); } catch {} }
+    return (r && typeof r === 'object') ? r : {};
+  };
+
+  async function populateCapsules() {
+    try {
+      const list = dictOf(await host.callTool('list_capsules', {}));
+      const caps = (list.capsules || []).filter(c => c && c.imageId);
+      sel.innerHTML = '';
+      for (const c of caps) {
+        const o = document.createElement('option');
+        o.value = c.imageId; o.textContent = c.name || c.imageId;
+        if (c.imageId === imageId) o.selected = true;
+        sel.appendChild(o);
+      }
+      if (!caps.length) sel.innerHTML = '<option value="">(none)</option>';
+    } catch (e) { sel.innerHTML = '<option value="">(unavailable)</option>'; }
+  }
+
+  async function refreshAirgap() {
+    // Only meaningful where the capsule exposes it; observe.network is present for the workbench.
+    try {
+      const st = dictOf(await host.callTool('network_airgap', { image_id: imageId, action: 'status' }));
+      if (st && (st.enforced === 'on' || st.enforced === 'off' || typeof st.enabled === 'boolean')) {
+        agRow.hidden = false;
+        const on = st.enabled === true || st.enforced === 'on';
+        agBox.checked = on;
+        // Status line must be DERIVED from true state, never left as a stale echo of the last
+        // button press — otherwise a refresh re-syncs the checkbox but the text lies (checkbox
+        // says air-gapped while the line still reads "internet open").
+        say(st.converging ? 'air-gap changing…'
+              : (on ? 'air-gapped — no internet from the box' : 'internet open — pip/git/npm work now'),
+            st.converging ? '' : 'ok');
+      } else { agRow.hidden = true; }
+    } catch { agRow.hidden = true; }  // capsule without the route (e.g. DOOM) -> hide the row
+  }
+
+  // Auto-suspend selector + usage readout (session_settings). Cost is a DISPLAY estimate, not a bill.
+  // The selector is bounded by the operator ceiling (idleSecondsMax) — a user can only pick a TIGHTER
+  // auto-suspend, never looser. That guardrail is the operator's; this widget only exposes the safe side.
+  const idleRow = $('setidlerow'), idleSel = $('setidle'), usageRow = $('usagerow'), usageLine = $('usageline');
+  function fmtDuration(s) {
+    s = Number(s) || 0;
+    if (s % 3600 === 0 && s >= 3600) return (s / 3600) + ' hr';
+    if (s % 60 === 0) return (s / 60) + ' min';
+    return s + 's';
+  }
+  function fmtElapsed(s) {
+    s = Math.max(0, Math.round(Number(s) || 0));
+    const m = Math.floor(s / 60), sec = s % 60;
+    return m ? `${m}m ${sec}s` : `${sec}s`;
+  }
+  async function refreshUsage() {
+    try {
+      const u = dictOf(await host.callTool('session_settings', { image_id: imageId, action: 'status' }));
+      if (!u || typeof u.idleSecondsMax !== 'number') { idleRow.hidden = true; usageRow.hidden = true; return; }
+      // Build the selector: preset ladder clamped to the operator ceiling, plus the operator max as "max".
+      const max = u.idleSecondsMax, min = u.idleSecondsMin || 60;
+      const presets = [180, 300, 900, 3600].filter(v => v >= min && v <= max);
+      if (!presets.includes(max)) presets.push(max);
+      idleSel.innerHTML = '';
+      for (const v of presets) {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = fmtDuration(v) + (v === max ? ' (max)' : '');
+        if (v === u.idleSeconds) o.selected = true;
+        idleSel.appendChild(o);
+      }
+      idleRow.hidden = false;
+      // Usage readout: running time · ~cost · (posture is on the air-gap row already).
+      const cost = typeof u.estimatedCostUsd === 'number' ? u.estimatedCostUsd : 0;
+      usageLine.textContent = `this session: ${fmtElapsed(u.runningSeconds)} running · ~$${cost.toFixed(2)} (est., not a bill)`;
+      usageRow.hidden = false;
+    } catch { idleRow.hidden = true; usageRow.hidden = true; }
+  }
+  async function setIdle(seconds) {
+    if (busy) return; busy = true;
+    say('updating auto-suspend…');
+    try {
+      await host.callTool('session_settings', { image_id: imageId, action: 'set_idle', idle_seconds: Number(seconds) });
+      say('auto-suspend set to ' + fmtDuration(seconds) + ' — takes effect next resume', 'ok');
+    } catch (e) {
+      say('auto-suspend change failed: ' + (e && e.message || e), 'err');
+    } finally { busy = false; }
+  }
+  idleSel.onchange = () => setIdle(idleSel.value);
+
+  async function setAirgap(on) {
+    if (busy) return; busy = true;
+    say(on ? 'cutting off internet…' : 'opening internet…');
+    try {
+      const r = dictOf(await host.callTool('network_airgap',
+        { image_id: imageId, action: on ? 'enable' : 'disable' }));
+      agBox.checked = (r.enabled === true) || (r.requested === 'on') || on;
+      say(on ? 'air-gapped — no internet from the box' : 'internet open — pip/git/npm work now', 'ok');
+    } catch (e) {
+      agBox.checked = !on;  // revert the toggle to truth
+      say('air-gap change failed: ' + (e && e.message || e), 'err');
+    } finally { busy = false; }
+  }
+
+  // Smart VM-image switch. TENANCY NOTE: every call below passes only image_id (a capsule TYPE, not a
+  // VM). The server resolves image_id -> THIS caller's own VM via the JWT-derived tenant key — the
+  // widget never sees or sends a microvm id, so a switch can only ever touch the caller's own VMs.
+  // Decision tree (per the product spec):
+  //   target has SUSPENDED VM (owned) -> freeze current-if-running, then thaw target. AUTOMATIC.
+  //   target has RUNNING VM (owned)   -> just switch to it.
+  //   target has NO VM (STOPPED/none) -> ALWAYS ask "launch new?"; if yes, freeze current-if-running
+  //                                      then play_capsule(target). If no, cancel (revert the select).
+  const capName = id => {
+    const o = [...sel.options].find(x => x.value === id);
+    return (o && o.textContent) || id;
+  };
+
+  async function targetState(nextImage) {
+    // Read-only, per-tenant: capsule_state returns THIS caller's VM state for the image (RUNNING /
+    // SUSPENDED / STOPPED / none). Never runs or resumes anything.
+    try {
+      const r = await host.callTool('capsule_state', { image_id: nextImage });
+      const t = (r && (r.structuredContent
+        || (r.content || []).map(c => c.text).find(Boolean))) || '';
+      const s = String(typeof t === 'object' ? (t.state || t) : t).toUpperCase();
+      if (s.includes('RUNNING')) return 'RUNNING';
+      if (s.includes('SUSPENDED')) return 'SUSPENDED';
+      return 'STOPPED';   // STOPPED / none / unknown all mean "no live VM the user owns"
+    } catch { return 'STOPPED'; }
+  }
+
+  async function freezeCurrentIfRunning() {
+    // Freeze the CURRENT session (by its own image_id) before we switch away, so the user's active
+    // work is paused (billing off), not abandoned. Same tenant-scoped freeze the Freeze button uses.
+    if (stopped || frozen || !imageId) return;
+    say('freezing current session…');
+    try { await playerRpcWithRefresh('freeze', {}, { timeoutMs: 8000 }); } catch {}
+    try { await callToolStructured('freeze', { image_id: imageId }); } catch (e) {
+      // non-fatal: the server may have suspended anyway; proceed with the switch
+    }
+    removePlayer();
+  }
+
+  async function doSwitch(nextImage, mode) {
+    // mode: 'thaw' (resume owned suspended/running VM) | 'launch' (create a new VM). Both call
+    // play_capsule, which the server routes to resume-or-boot for the caller's own tenant.
+    releaseAllToPlayer(); removePlayer();
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+    starting = true; frozen = false; stopped = false;
+    setIntent('running'); renderUI();
+    setStatus(mode === 'launch' ? 'launching new VM…' : 'resuming your VM…');
+    const sc = await callToolStructured('play_capsule', { image_id: nextImage });
+    applySession(sc);   // repoints imageId/relay/token/capsule metadata to the caller's target VM
+    starting = false;
+    frozen = sc.state === 'SUSPENDED';
+    stopped = sc.state === 'STOPPED';
+    renderUI();
+    await playerRpc('start', { muted }, 60000);
+    setStatus('RUNNING · ' + capName(nextImage));
+    await refreshAirgap();
+  }
+
+  async function switchCapsule(nextImage) {
+    if (busy || !nextImage || nextImage === imageId) return;
+    busy = true;
+    try {
+      say('checking your VMs for ' + capName(nextImage) + '…');
+      const state = await targetState(nextImage);
+      if (state === 'SUSPENDED' || state === 'RUNNING') {
+        // Owned VM exists → freeze current (if running) and switch, automatically, no prompt.
+        await freezeCurrentIfRunning();
+        await doSwitch(nextImage, 'thaw');
+      } else {
+        // No VM owned for this image → ALWAYS confirm a new launch (billable compute).
+        const running = !stopped && !frozen;
+        const ok = await confirmLaunch(nextImage, running);
+        if (!ok) { revertSelect(); say('switch cancelled'); return; }
+        if (running) await freezeCurrentIfRunning();
+        await doSwitch(nextImage, 'launch');
+      }
+    } catch (e) {
+      starting = false; frozen = true; renderUI();
+      revertSelect();
+      setStatus('capsule switch: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+    } finally { busy = false; }
+  }
+
+  function revertSelect() {
+    const o = [...sel.options].find(x => x.value === imageId);
+    if (o) o.selected = true;
+  }
+
+  // Confirm dialog for a NEW launch (mirrors the trash-menu overlay style).
+  function confirmLaunch(nextImage, running) {
+    return new Promise(resolve => {
+      const prev = document.getElementById('launchpane');
+      if (prev) prev.remove();
+      const o = document.createElement('div'); o.id = 'launchpane';
+      const box = document.createElement('div'); box.className = 'box';
+      const title = document.createElement('div');
+      title.textContent = 'Launch a new ' + capName(nextImage) + ' VM?';
+      title.style.cssText = 'color:#cfe0ff;font-size:14px';
+      const body = document.createElement('div');
+      body.textContent = running
+        ? 'You have no ' + capName(nextImage) + ' VM yet. Launching one starts new compute; your current session will be frozen (billing paused) first.'
+        : 'You have no ' + capName(nextImage) + ' VM yet. Launching one starts new compute.';
+      body.style.cssText = 'color:#c4c4ca';
+      const actions = document.createElement('div'); actions.className = 'actions';
+      const yes = document.createElement('button'); yes.type = 'button'; yes.className = 'primary';
+      yes.textContent = running ? 'Freeze & Launch' : 'Launch';
+      const no = document.createElement('button'); no.type = 'button'; no.textContent = 'Cancel';
+      const done = v => { o.remove(); resolve(v); };
+      yes.onclick = () => done(true); no.onclick = () => done(false);
+      actions.append(yes, no); box.append(title, body, actions); o.appendChild(box);
+      $('wrap').appendChild(o);
+    });
+  }
+
+  sel.onchange = () => switchCapsule(sel.value);
+  agBox.onchange = () => setAirgap(agBox.checked);
+  // No memory selector: AWS Lambda MicroVM caps at 8192 MiB for the al2023-1 base (supported sizes
+  // 512/1024/2048/4096/8192 — 16 GB is rejected at image build), so 8 GB is the only tier. The
+  // server-side _tier_image_id plumbing stays (inert without a registered tier) in case the cap lifts.
+
+  $('settingsbtn').onclick = async () => {
+    pane.hidden = !pane.hidden;
+    if (!pane.hidden) { say(''); await populateCapsules(); await refreshAirgap(); await refreshUsage(); }
+  };
+  return { refreshAirgap, refreshUsage };
+})();
+
+function hideTrashMenu() {
+  const o = document.getElementById('trashpane');
+  if (o) o.remove();
+}
+
+function showTrashMenu() {
+  hideTrashMenu();
+  const o = document.createElement('div');
+  o.id = 'trashpane';
+  const box = document.createElement('div');
+  box.className = 'box';
+  const title = document.createElement('div');
+  title.textContent = 'Trash this MicroVM?';
+  title.style.cssText = 'color:#ffb0a8;font-size:14px';
+  const body = document.createElement('div');
+  body.textContent = 'Terminate only stops and unmaps the current VM. Terminate + New replaces it with a fresh VM for this same user/image.';
+  body.style.cssText = 'color:#c4c4ca';
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const terminate = document.createElement('button');
+  terminate.type = 'button';
+  terminate.className = 'danger';
+  terminate.textContent = '🗑 Terminate';
+  terminate.onclick = () => trashMicrovm(false);
+  const replace = document.createElement('button');
+  replace.type = 'button';
+  replace.className = 'primary';
+  replace.textContent = '🗑 Terminate + New';
+  replace.onclick = () => trashMicrovm(true);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.onclick = hideTrashMenu;
+  actions.append(terminate, replace, cancel);
+  box.append(title, body, actions);
+  o.appendChild(box);
+  $('wrap').appendChild(o);
+}
+
+async function trashMicrovm(relaunch) {
+  hideTrashMenu();
+  releaseAllToPlayer();
+  removePlayer();
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }  // kill any pending waking refresh
+  starting = !!relaunch;
+  frozen = false;
+  stopped = !relaunch;
+  // Intent: a plain trash is a deliberate STOP — persist it so a widget remount can't relaunch.
+  // Trash+relaunch is an explicit user launch, so intent stays running.
+  setIntent(relaunch ? 'running' : 'stopped');
+  try {
+    localStorage.removeItem(storageKey('frozen'));
+  } catch {}
+  renderUI();
+  setStatus(relaunch ? 'terminating VM and launching a fresh one…' : 'terminating VM…');
+  try {
+    const sc = await callToolStructured('trash_microvm', { image_id: imageId, relaunch: !!relaunch });
+    applySession(sc);
+    starting = false;
+    stopped = !relaunch || sc.state === 'STOPPED';
+    frozen = sc.state === 'SUSPENDED';
+    renderUI();
+    if (relaunch) {
+      await playerRpc('start', { muted }, 60000);
+      setStatus('RUNNING · fresh microvm');
+    } else {
+      token = '';
+      edgeAuth = '';
+      setStatus(sc.previousMicrovmId ? 'terminated · no microvm mapped' : 'no microvm mapped');
+    }
+  } catch (e) {
+    starting = false;
+    stopped = false;
+    frozen = true;
+    renderUI();
+    setStatus('trash: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+  }
+}
+
+// Stream-stall watchdog: the player reports "FPS <n> · connection <q>" every second. A run of
+// FPS 0 while RUNNING means the SSE streams died without an error the player could see — observed
+// on ChatGPT desktop after a display-mode transition (the docked pop-out severs the streams; web
+// survives). Recovery = re-mint the session token (refreshSession → applySession posts setToken)
+// and tell the player to restart its streams. Rate-limited so a genuinely broken relay doesn't loop.
+let stallZeros = 0;
+let lastNudge = 0;
+let lastReconnectProbe = 0;
+function probeLifecycleOnReconnect(s) {
+  if (!/\b(?:connecting|reconnecting|buffering)\b/i.test(String(s))) return;
+  if (frozen || stopped || starting || !canAutoWake()) return;
+  const now = Date.now();
+  if (now - lastReconnectProbe < 5000) return;
+  lastReconnectProbe = now;
+  // Do not ask the player to restart until the non-waking control-plane read confirms RUNNING.
+  // If the VM was frozen externally, refreshSession converts the card to the Thaw state instead.
+  refreshSession({ reason: 'player reconnect', requireToken: false }).catch(() => {});
+}
+function watchForStall(s) {
+  const fps = /FPS\s+([\d.]+)/.exec(String(s));
+  if (!fps) return;
+  stallZeros = Number(fps[1]) === 0 ? stallZeros + 1 : 0;
+  if (stallZeros < 5 || frozen || stopped || starting || !playerActive() || !canAutoWake()) return;
+  if (Date.now() - lastNudge < 30000) return;
+  lastNudge = Date.now();
+  stallZeros = 0;
+  setStatus('stream stalled — reconnecting…');
+  refreshSession({ reason: 'stream stall' }).then(() => {
+    // stop THEN start: startStreams() no-ops while the player still thinks it's started.
+    sendPlayerCmd('stop');
+    sendPlayerCmd('start', { muted });
+  }).catch(() => {});
+}
+
+addEventListener('message', ev => {
+  if (!playerFrame || ev.source !== playerFrame.contentWindow || ev.origin !== playerMessageOrigin()) return;
+  const m = ev.data;
+  if (!m || !m.pairputer) return;
+  if (m.pairputer === 'booted') {
+    if (playerReadyResolve) playerReadyResolve();
+    if (playerFrame && playerFrame.contentWindow) {
+      postToPlayer({ cmd: 'setMuted', muted });
+      postToPlayer({ cmd: 'setToken', token, edgeAuth });
+    }
+    return;
+  }
+  // (direct player emits no postMessage 'booted' — it's controlled by direct rpc calls)
+  if (m.pairputer === 'status') {
+    // A stale iframe keeps posting "FPS 0 · reconnecting" after freeze/trash. Never let that drive
+    // recovery when the user has stopped/frozen — this was the ~4s freeze auto-thaw path.
+    if (frozen || stopped || !canAutoWake()) return;
+    // First real frame (iframe path): FPS > 0 means the player is painting -> drop the loading cover.
+    const fps = /FPS\s+([\d.]+)/.exec(String(m.s));
+    if (fps && Number(fps[1]) > 0) firstFrame();
+    setStatus('player: ' + m.s);
+    probeLifecycleOnReconnect(m.s);
+    watchForStall(m.s);
+    return;
+  }
+  if (m.pairputer === 'playing') {
+    firstFrame();   // the iframe player reports it's actively streaming -> drop the cover
+    setStatus('RUNNING · streaming');
+    return;
+  }
+  if (m.pairputer === 'display') {
+    updateVideoMetadata(m.encodedWidth || m.width, m.encodedHeight || m.height);
+    return;
+  }
+  // The iframe player's video SSE errored on a URL it can't recover (expired edgeAuth/token after
+  // freeze rotates the session, or a >15-min token). It can't read the 403 itself, so it asks us to
+  // re-mint. refreshSession → applySession pushes a fresh setToken, which restarts the player's streams
+  // on the new signed URL. Skip while frozen (the 403 is intended) and debounce the request storm.
+  if (m.pairputer === 'needtoken') {
+    if (frozen) return;
+    const now = Date.now();
+    if (now - (lastNeedTokenAt || 0) < 5000) return;
+    lastNeedTokenAt = now;
+    refreshSession({ reason: 'stream 403' }).catch(e => setStatus('token refresh: ' + reconnectMessage(e)));
+    return;
+  }
+  if (m.pairputer === 'reply' && m.id && playerPending.has(m.id)) {
+    const p = playerPending.get(m.id);
+    playerPending.delete(m.id);
+    clearTimeout(p.timer);
+    if (m.ok) p.resolve(m.result || {});
+    else p.reject(new Error(m.error || 'player command failed'));
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (frozen || !playerActive()) return;
+  const MAP = { KeyW: 'ArrowUp', KeyS: 'ArrowDown', KeyA: 'ArrowLeft', KeyD: 'ArrowRight' };
+  const key = MAP[e.code] || e.key;
+  if (!parentHeld.has(key)) {
+    parentHeld.add(key);
+    sendPlayerInput({ t: 'k', down: true, key });
+  }
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Control'].includes(key)) e.preventDefault();
+});
+window.addEventListener('keyup', e => {
+  if (frozen || !playerActive()) return;
+  const MAP = { KeyW: 'ArrowUp', KeyS: 'ArrowDown', KeyA: 'ArrowLeft', KeyD: 'ArrowRight' };
+  const key = MAP[e.code] || e.key;
+  if (parentHeld.delete(key)) {
+    sendPlayerInput({ t: 'k', down: false, key });
+  }
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Control'].includes(key)) e.preventDefault();
+});
+window.addEventListener('blur', releaseAllToPlayer);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllToPlayer(); });
+
+// Clicking the visible game area does not reliably hand keyboard focus across
+// the widget -> player iframe boundary. Force it so the player's own
+// keydown/canvas listeners actually receive events after a click.
+$('wrap').addEventListener('mousedown', () => {
+  if (directPlayer && directPlayer.canvas) { try { directPlayer.canvas.focus(); } catch {} return; }
+  if (playerFrame && playerFrame.contentWindow) {
+    try { playerFrame.contentWindow.focus(); } catch {}
+  }
+});
+
+$('freeze').onclick = async () => {
+  // Commit the intent FIRST and stop the player up front, so no stale-player status/needtoken can
+  // drive recovery mid-freeze. The authoritative MCP freeze runs before the relay drain, and we
+  // NEVER roll the intent back to running on an error — a drain error must not un-freeze a VM the
+  // server already suspended (this was the ~4s auto-thaw).
+  frozen = true;
+  stopped = false;
+  setIntent('frozen');
+  try { localStorage.setItem(storageKey('frozen'), '1'); } catch {}
+  renderUI();
+  setStatus('freezing…');
+  removePlayer();
+  try {
+    // Best-effort relay drain (its failure is non-fatal — the MCP freeze suspends regardless).
+    try { await playerRpcWithRefresh('freeze', {}, { timeoutMs: 8000 }); } catch {}
+    const r = await callToolStructured('freeze', { image_id: imageId });
+    const suspended = r.action === 'suspended' || r.state === 'SUSPENDED';
+    // Only trust the server's state when it actually confirms suspension. If freeze came back RUNNING
+    // (shouldn't happen now the relay refuses to auto-resume a suspending VM, but be defensive), keep
+    // the frozen intent and tell the user to retry rather than leaving a stuck "freezing…".
+    if (suspended) { applySession(r); setStatus('SUSPENDED · billing paused'); }
+    else { setStatus('freeze did not confirm — the VM may still be running; click Thaw then Freeze again'); }
+  } catch (e) {
+    // Freeze may still have suspended server-side; stay frozen and let the user Thaw explicitly.
+    setStatus('freeze reported an error but the VM may be suspended — click Thaw to resume: '
+      + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+  }
+};
+
+$('thaw').onclick = async () => {
+  // Explicit user gesture: this is the ONLY path allowed to move intent back to running.
+  frozen = false;
+  stopped = false;
+  setIntent('running');
+  try { localStorage.removeItem(storageKey('frozen')); } catch {}
+  renderUI();
+  setStatus('thawing…');
+  try {
+    const sc = await callToolStructured('thaw', { image_id: imageId });
+    applySession(sc);
+    await playerRpc('thaw', { muted }, 60000);
+    setStatus('RUNNING · billing on');
+  } catch (e) {
+    frozen = true;
+    stopped = false;
+    setIntent('frozen');
+    try { localStorage.setItem(storageKey('frozen'), '1'); } catch {}
+    renderUI();
+    setStatus('thaw: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+  }
+};
+
+$('trash').onclick = showTrashMenu;
+// Mode toggles (host-gated visibility via updateModeButton; requests only from these click
+// handlers — the user-gesture rule). Toggling out always requests inline.
+$('full').onclick = async () => {
+  // Toggle OFF first if we're already expanded.
+  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch {} updateModeButton(); return; }
+  if (displayMode === 'fullscreen') { setMode('inline'); return; }
+  // ALWAYS ask the Apps SDK first — there is NO availableDisplayModes field to feature-detect on
+  // (confirmed against the SDK reference, July 2026), and the server's per-host guess was wrong for
+  // the combined ChatGPT/Codex app, so pre-gating hid the button's effect. Trust the GRANTED mode
+  // the SDK returns; only if it declines to non-fullscreen do we fall back to native element
+  // fullscreen (works wherever the embedding iframe permits it).
+  let granted = 'inline';
+  try { granted = await setMode('fullscreen'); } catch {}
+  if (granted === 'fullscreen') return;
+  try {
+    await document.documentElement.requestFullscreen();
+    document.body.classList.add('expanded');
+    updateModeButton();
+  } catch {
+    setStatus('this host does not allow fullscreen for embedded apps');
+  }
+};
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && displayMode !== 'fullscreen') document.body.classList.remove('expanded');
+  updateModeButton();
+});
+updateModeButton();
+applyHostLayout();
+$('mute').onclick = () => {
+  muted = !muted;
+  renderUI();
+  if (playerActive()) sendPlayerCmd('setMuted', { muted });
+};
+
+(async () => {
+  setStatus('loading…');
+  // Complete the MCP Apps handshake FIRST, unconditionally. On the standard bridge (Claude) this
+  // opens the tools/call gate and yields hostContext + the tool-result notification; on
+  // openai-family hosts (Codex/ChatGPT) host.initialize() is a no-op that opens the gate instantly
+  // and returns null (their tool data rides window.openai.toolOutput, read below). Running it
+  // before any refreshSession() is what stops the "tools/call before initialized" refusal that
+  // kept the widget veiled on claude.ai.
+  // Kick off the handshake but do NOT block boot on it or race a timeout that could open the
+  // tools/call gate before 'initialized' is sent (that fired a premature tools/call on claude.ai —
+  // reproduced locally). initialize() opens the gate itself once initialized is delivered; on
+  // openai hosts it resolves instantly. We fire-and-forget and adopt hostContext when it lands.
+  const stdBridge = !host.usesOpenAi();
+  // Claude (the standard MCP Apps bridge) ALWAYS grants fullscreen per Anthropic's design guidelines,
+  // and doesn't reliably send availableDisplayModes in the ui/initialize hostContext. So seed
+  // fullscreen optimistically on the standard bridge — the request is advisory (setMode reads the
+  // GRANTED mode back, so if a host ever declines we self-correct). Any extra modes the host DOES
+  // advertise (e.g. a future pip) are still merged from hostContext below.
+  if (stdBridge) mergeHostModes(['fullscreen']);
+  host.initialize().then(init => {
+    const hc = init && init.hostContext;
+    if (hc) {
+      if (hc.displayMode) { displayMode = hc.displayMode; updateModeButton(); }
+      if (hc.theme === 'light') document.body.classList.add('light');
+      // MCP Apps standard: the host declares which modes it grants (adds anything beyond fullscreen).
+      mergeHostModes(hc.availableDisplayModes);
+      applyHostLayout();
+    }
+  }).catch(() => {});
+  // On the standard bridge the tool-result arrives as a ui/* NOTIFICATION shortly after the
+  // handshake — poll a bit longer for it. openai hosts already have toolOutput synchronously.
+  let sc = readToolData();
+  const bootPolls = stdBridge ? 60 : 20;
+  for (let i = 0; i < bootPolls && !(sc && (sc.token || sc.relayUrl)); i++) {
+    await new Promise(r => setTimeout(r, 100));
+    sc = readToolData();
+  }
+  if (!sc) {
+    // Remount with no re-delivered toolOutput (display-mode transition, host-side remount): the
+    // widgetState snapshot names the session's capsule/nonce, which is enough for refreshSession
+    // to re-mint a token for the RIGHT capsule. Never a mode request here (no gesture).
+    const ws = host.getWidgetState();
+    if (ws && ws.imageId) { imageId = String(ws.imageId); openNonce = ws.openNonce ? String(ws.openNonce) : openNonce; }
+  }
+  applySession(sc);
+  let bootSession = sc || null;
+  let persisted = false;
+  let lastOpenNonce = '';
+  try {
+    persisted = localStorage.getItem(storageKey('frozen')) === '1';
+    lastOpenNonce = localStorage.getItem(storageKey('open_nonce')) || '';
+  } catch {}
+  const nonce = (bootSession && bootSession.openNonce) || openNonce || '';
+  // A NEW nonce is an explicit play_capsule invocation and therefore overrides an older
+  // stopped/frozen latch. A host remount replays the SAME nonce, so it is not explicit and the
+  // persisted lifecycle intent still vetoes any wake. This is the critical distinction between a
+  // real open and a remount of an old card.
+  const bootIntent = getIntent();
+  const explicitOpen = isFreshExplicitOpen(bootSession, lastOpenNonce);
+  if (explicitOpen) {
+    try {
+      localStorage.setItem(storageKey('open_nonce'), nonce);
+      localStorage.removeItem(storageKey('frozen'));
+    } catch {}
+    persisted = false;
+    setIntent('running');
+  }
+  // Standard bridge (Claude): the delivered tool-result payload already carries token + relayUrl +
+  // edgeAuth, and a boot-time tools/call races the ui/initialize handshake (the host rejects a
+  // tools/call before 'initialized' and refuses to reveal the app — reproduced locally). So when we
+  // already have a usable session, trust it and skip the boot refreshSession. Token refresh still
+  // happens later via the timer, AFTER the gate is open.
+  const haveSession = !!(bootSession && bootSession.token && bootSession.relayUrl);
+  try {
+    if (explicitOpen && haveSession) {
+      // play_capsule already synchronously launched/resumed the VM and returned an authoritative
+      // RUNNING session. Trust it: Codex does not reliably deliver a boot-time follow-up callTool.
+    } else if (stdBridge && haveSession && !explicitOpen) {
+      // nothing to fetch — render from the delivered payload
+    } else if (explicitOpen) {
+      starting = true;
+      frozen = false;
+      stopped = false;
+      setIntent('running');
+      renderUI();
+      setStatus('starting VM and relay…');
+      bootSession = await refreshSession({ reason: 'startup', ensureRunning: true }) || bootSession;
+    } else {
+      bootSession = await refreshSession({
+        reason: 'boot state',
+        ensureRunning: false,
+        requireToken: false,
+      }) || bootSession;
+    }
+  } catch (e) {
+    // A double-open in one turn: this widget lost the race, its play_capsule/refresh came back with
+    // no session, and refreshSession threw. Rather than paint a dead "returned no session / SUSPENDED"
+    // card next to the live one, recover ONCE by launching — the server resolves concurrency conflicts
+    // to the winning session, so this lands on the same running VM. Only when the user didn't
+    // deliberately freeze/stop (not an auth error, and no stop/frozen intent).
+    const recoverable = !isAuthError(e) && bootIntent !== 'stopped' && bootIntent !== 'frozen' && !persisted;
+    if (recoverable) {
+      try {
+        starting = true; frozen = false; stopped = false; setIntent('running'); renderUI();
+        setStatus('reconnecting to the running session…');
+        bootSession = await refreshSession({ reason: 'startup', ensureRunning: true }) || bootSession;
+      } catch (e2) {
+        starting = false; frozen = true; stopped = false; renderUI();
+        setStatus('session: ' + (isAuthError(e2) ? reconnectMessage(e2) : formatError(e2)));
+        return;
+      }
+    } else {
+      starting = false;
+      frozen = true;
+      stopped = false;
+      renderUI();
+      setStatus('session: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+      return;
+    }
+  }
+
+  let realState = (bootSession && bootSession.state) || (persisted ? 'SUSPENDED' : 'RUNNING');
+  if (bootIntent === 'stopped' && !explicitOpen) realState = 'STOPPED';  // honor the deliberate stop
+  if (!explicitOpen && !persisted && bootIntent !== 'stopped' && realState === 'RUNNING' && token) {
+    try {
+      const r = await playerRpcWithRefresh('state', {}, { timeoutMs: 15000 });
+      realState = r.state || 'UNKNOWN';
+    } catch (e) {
+      setStatus('state: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+      realState = persisted ? 'SUSPENDED' : 'UNKNOWN';
+    }
+  }
+
+  starting = false;
+  stopped = !explicitOpen && realState === 'STOPPED';
+  frozen = !stopped && !explicitOpen && (persisted || realState !== 'RUNNING');
+  // Reconcile the persisted intent with the resolved reality so canAutoWake() is correct for the
+  // rest of the session (a freshly-delivered RUNNING payload on remount → running intent).
+  setIntent(stopped ? 'stopped' : frozen ? 'frozen' : 'running');
+  renderUI();
+  if (stopped) {
+    setStatus('stopped — click Launch to start fresh');
+    removePlayer();
+  } else if (frozen) {
+    setStatus('suspended — click Thaw to resume');
+    removePlayer();
+  } else {
+    try {
+      await playerRpcWithRefresh('start', { muted }, { timeoutMs: 15000, ensureRunning: true });
+      setStatus('RUNNING · billing on');
+    } catch (e) {
+      setStatus('start: ' + (isAuthError(e) ? reconnectMessage(e) : formatError(e)));
+    }
+  }
+
+  setInterval(async () => {
+    // Only poll while the user intends a running session. When frozen/stopped this loop must not
+    // refresh tokens or read state — doing so kept re-touching a suspended session and, combined
+    // with the recovery paths, contributed to the auto-thaw.
+    if (!canAutoWake() || !playerFrame) return;
+    try {
+      await ensureFreshSession({ reason: 'poll' });
+      const r = await playerRpc('state', {}, 8000);
+      const s = r.state || 'UNKNOWN';
+      if (!['RUNNING', 'RESUMING', 'PENDING'].includes(s)) {
+        stopped = s === 'STOPPED' || s === 'TERMINATED';
+        frozen = !stopped;
+        setIntent(stopped ? 'stopped' : 'frozen');
+        try {
+          if (stopped) localStorage.removeItem(storageKey('frozen'));
+          else localStorage.setItem(storageKey('frozen'), '1');
+        } catch {}
+        renderUI();
+        removePlayer();
+        setStatus(stopped ? 'stopped — click Launch to start fresh' : 'suspended — click Thaw to resume');
+      }
+    } catch {
+      // A suspended relay rejects `/state` by design. Consult the MCP control plane once so the
+      // card reflects SUSPENDED instead of leaving a permanently reconnecting player on screen.
+      refreshSession({ reason: 'poll fallback', requireToken: false }).catch(() => {});
+    }
+  }, 15000);
+})();
+</script>

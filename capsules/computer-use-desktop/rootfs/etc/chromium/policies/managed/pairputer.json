@@ -1,0 +1,8 @@
+{
+  "BrowserSignin": 0,
+  "PasswordManagerEnabled": false,
+  "SyncDisabled": true,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "DeveloperToolsAvailability": 0
+}

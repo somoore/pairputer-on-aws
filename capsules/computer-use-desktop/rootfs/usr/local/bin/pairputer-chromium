@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+test "$(id -u)" -ne 0 || { echo "Chromium refuses root" >&2; exit 70; }
+test -x /opt/chromium/chrome
+test "$(stat -c '%u:%g:%a' /opt/chromium/chrome-sandbox)" = "0:0:4755" || {
+  echo "Chromium setuid sandbox ownership/mode invalid" >&2; exit 70;
+}
+proxy_host="${PAIRPUTER_EGRESS_PROXY_HOST:-127.0.0.1}"
+proxy_port="${PAIRPUTER_EGRESS_PROXY_PORT:-6907}"
+code_server_port="${PAIRPUTER_CODE_SERVER_PORT:-4500}"
+test "$proxy_host" = "127.0.0.1" || { echo "Chromium egress proxy must be loopback" >&2; exit 70; }
+# Do not start a browser that could later be mistaken for network-capable while
+# its mandatory egress boundary is missing.  Fixed proxy configuration has no
+# DIRECT fallback, so a later proxy crash also fails closed.
+python3.11 -c 'import http.client,sys; c=http.client.HTTPConnection(sys.argv[1],int(sys.argv[2]),timeout=2); c.request("GET","/health"); r=c.getresponse(); r.read(); c.close(); raise SystemExit(0 if r.status==204 else 1)' \
+  "$proxy_host" "$proxy_port" || { echo "Chromium egress proxy unavailable" >&2; exit 70; }
+profile=/home/app/.config/chromium
+# Chromium's process singleton is profile-scoped.  A hard renderer/browser
+# crash can leave these fixed-name entries behind; a later launcher then exits
+# successfully after trying to signal a socket that no longer has an owner.
+# Remove only the three known singleton entries, and only when no browser main
+# process owned by this desktop user exists.  Never inspect profile content.
+if ! pgrep -u "$(id -u)" -f "^/opt/chromium/chrome --user-data-dir=$profile([[:space:]]|$)" >/dev/null 2>&1; then
+  for entry in SingletonCookie SingletonLock SingletonSocket; do
+    candidate="$profile/$entry"
+    if test -L "$candidate" || test -f "$candidate"; then
+      rm -f -- "$candidate"
+    fi
+  done
+fi
+# No --host-resolver-rules: the mandatory --proxy-server already resolves all
+# names proxy-side (Chromium never resolves locally when a proxy is set), and the
+# proxy-availability preflight above fails closed. The resolver rule only added
+# Chromium's yellow "unsupported command-line flag" banner for no security gain.
+#
+# --proxy-bypass-list is EXACTLY the loopback code-server port and nothing else.
+# code-server (VS Code) is a same-box internal service, not egress; the egress
+# proxy hard-rejects both raw loopback GETs and cleartext `Upgrade: websocket`
+# (egress_proxy.py), so routing 127.0.0.1:4500 through it kills code-server's
+# WebSocket with a 1006 the instant the workbench loads. This one host:port
+# bypass is not an air-gap hole — the egress boundary governs OUTBOUND internet,
+# and the box reaching its own code-server is neither outbound nor internet.
+# An explicit bypass list REPLACES Chromium's default loopback bypass, so ONLY
+# this literal 127.0.0.1:port bypasses; every other loopback address and port
+# still traverses the proxy, so no other in-box port is exposed.
+# Open below the dock (44px top): a fixed non-maximized window so the dock stays visible above it.
+exec /opt/chromium/chrome \
+  --user-data-dir="$profile" \
+  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --remote-allow-origins=http://127.0.0.1 \
+  --proxy-server="http://${proxy_host}:${proxy_port}" \
+  --proxy-bypass-list="127.0.0.1:${code_server_port}" \
+  --disable-quic \
+  --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
+  --no-first-run --no-default-browser-check --disable-background-networking \
+  --disable-component-update --disable-sync --disable-features=DnsOverHttpsUpgrade \
+  --window-position=0,44 --window-size=1440,820 \
+  --ozone-platform=x11 "${@:-about:blank}"

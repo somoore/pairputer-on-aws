@@ -1,0 +1,523 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: pairputer AgentCore MCP runtime and MicroVM/relay controller role.
+
+Parameters:
+  ContainerUri:
+    Type: String
+  UseCustomRuntime:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      true (Public image mode) => create the runtime via an API-backed custom resource, because the native
+      AWS::BedrockAgentCore::Runtime CFN resource's ContainerUri schema rejects public.ecr.aws. false
+      (Private mode) => use the native resource with the private-ECR image.
+  DoomImageArn:
+    Type: String
+    Description: The default capsule's MicroVM image ARN (PAIRPUTER_IMAGE_ARN fallback; capsule id 'doom').
+  CapsuleRegistryJson:
+    Type: String
+    Description: >
+      JSON map of capsule id -> MicroVM image ARN, e.g. {"doom":"arn:..."}. One MCP server serves every
+      capsule in this map (PAIRPUTER_IMAGE_REGISTRY). Built by the root stack from the deployed capsules.
+  CapsuleImageArns:
+    Type: CommaDelimitedList
+    Description: All capsule image ARNs, for least-privilege MicroVM control IAM (one entry today; N later).
+  RuntimeName:
+    Type: String
+  RelayUrl:
+    Type: String
+  RelaySessionSecretArn:
+    Type: String
+  CloudFrontSigningPrivateKeySecretArn:
+    Type: String
+  CloudFrontPublicKeyId:
+    Type: String
+  RelayClusterName:
+    Type: String
+  RelayServiceName:
+    Type: String
+  RelayTargetGroupArn:
+    Type: String
+  SessionTableName:
+    Type: String
+  SessionTableArn:
+    Type: String
+  RelayWarmSeconds:
+    Type: Number
+    Default: -1
+    Description: Relay warm policy passed to the control plane (-1 always-on; 0 scale-to-zero when idle; N>0 warm N seconds). See relay.yaml.
+  DiscoveryUrl:
+    Type: String
+  M2MClientId:
+    Type: String
+  CodexClientId:
+    Type: String
+  ChatGPTClientId:
+    Type: String
+  ClaudeClientId:
+    Type: String
+  RequiredScope:
+    Type: String
+    Description: OAuth scope that every JWT must carry to invoke the pairputer MCP runtime.
+  UserPoolId:
+    Type: String
+    Default: ""
+  CapsuleManifestJson:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional capability manifest (capsule.yaml as JSON) for the deployed capsule. When set, the MCP
+      server registers the agent-interaction tools it declares (interaction.md Tier 1/2). Empty = Tier 0:
+      the capsule is agent-inert and no agent tools exist.
+  TenantStorageBucket:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional S3 bucket for durable per-tenant workspace storage. When set, the MCP control plane
+      mirrors each capsule's workspace persistent/ subtree to tenant-storage/<tenantId>/<imageId>/ at
+      freeze/trash and restores it into fresh VMs. The MicroVM itself never receives credentials — the
+      sync rides the same bounded, hash-verified agent-bridge tools. Empty = feature disabled.
+
+Conditions:
+  RegisterCallback: !Not [!Equals [!Ref UserPoolId, ""]]
+  UseCustom: !Equals [!Ref UseCustomRuntime, "true"]
+  UseNative: !Equals [!Ref UseCustomRuntime, "false"]
+  HasTenantStorage: !Not [!Equals [!Ref TenantStorageBucket, ""]]
+
+Resources:
+  ControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "BedrockAgentCore-${AWS::StackName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AgentCoreTrust
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      Policies:
+        - PolicyName: AgentCoreRuntimeBaseline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ECRImageAccess
+                Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+              - Sid: ECRTokenAccess
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: LogsGroup
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+              - Sid: LogsDescribe
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+              - Sid: LogsStream
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*"
+              - Sid: XRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"
+              - Sid: Metrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: bedrock-agentcore
+        - PolicyName: PairputerMicrovmControl
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: MicrovmControl
+                Effect: Allow
+                Action:
+                  - lambda:RunMicrovm
+                  - lambda:GetMicrovm
+                  - lambda:SuspendMicrovm
+                  - lambda:ResumeMicrovm
+                  - lambda:TerminateMicrovm
+                  # Agent tools: mint the short-lived X-aws-proxy-auth token to reach the capsule's
+                  # agent bridge through the VM's :443 gateway (same pattern as the relay's upstream).
+                  - lambda:CreateMicrovmAuthToken
+                Resource: !Ref CapsuleImageArns   # the bundled capsule image(s), if any
+              # Cartridge model: control ANY MicroVM image tagged as a pairputer capsule — so capsules
+              # deployed as their own stacks AFTER the substrate (with ARNs the substrate never knew) are
+              # controllable without redeploying the control plane. Scoped by the pairputer:capsule tag, so
+              # this grants nothing over non-pairputer MicroVM images. (docs/capsule-architecture.md)
+              - Sid: MicrovmControlTaggedCapsules
+                Effect: Allow
+                Action:
+                  - lambda:RunMicrovm
+                  - lambda:GetMicrovm
+                  - lambda:SuspendMicrovm
+                  - lambda:ResumeMicrovm
+                  - lambda:TerminateMicrovm
+                  - lambda:CreateMicrovmAuthToken
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/pairputer:capsule: "true"
+              # Tag-based discovery: enumerate pairputer-tagged capsule images for list_capsules.
+              - Sid: CapsuleDiscovery
+                Effect: Allow
+                Action: tag:GetResources
+                Resource: "*"
+              # Read each discovered capsule's capability manifest (cartridge model): the manifest lives in
+              # SSM at /pairputer/capsules/<id>/manifest, pointed to by the image's pairputer:capsule-manifest-ssm
+              # tag. Scoped to the pairputer capsule namespace ONLY — never broad ssm:GetParameter on "*".
+              - Sid: CapsuleManifestRead
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pairputer/capsules/*"
+              - Sid: PassNetworkConnector
+                Effect: Allow
+                Action: lambda:PassNetworkConnector
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:ALL_INGRESS"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+        - PolicyName: PairputerSessionSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref RelaySessionSecretArn
+                  - !Ref CloudFrontSigningPrivateKeySecretArn
+        - PolicyName: PairputerRelayControl
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${RelayClusterName}/${RelayServiceName}"
+              - Effect: Allow
+                Action: elasticloadbalancing:DescribeTargetHealth
+                Resource: "*"
+        - PolicyName: PairputerSessionStore
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:TransactWriteItems
+                  - dynamodb:Query
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !Ref SessionTableArn
+                  - !Sub "${SessionTableArn}/index/*"
+        - !If
+          - HasTenantStorage
+          - PolicyName: PairputerTenantStorage
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                # Durable per-tenant workspace mirror. Scoped to the ONE tenant-storage/ prefix tree of
+                # the ONE bucket; the control plane derives the tenant sub-prefix from the caller's
+                # JWT-derived tenant hash, so a caller can never address another tenant's objects.
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:DeleteObject
+                  Resource: !Sub "arn:aws:s3:::${TenantStorageBucket}/tenant-storage/*"
+                - Effect: Allow
+                  Action:
+                    - s3:ListBucket
+                  Resource: !Sub "arn:aws:s3:::${TenantStorageBucket}"
+                  Condition:
+                    StringLike:
+                      s3:prefix: "tenant-storage/*"
+          - !Ref AWS::NoValue
+
+  # --- Native runtime (Private image mode): the CFN resource accepts private-ECR ContainerUri. ---------
+  McpRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Condition: UseNative
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AgentRuntimeName: !Ref RuntimeName
+      RoleArn: !GetAtt ControllerRole.Arn
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Ref ContainerUri
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: MCP
+      EnvironmentVariables:
+        PAIRPUTER_IMAGE_ARN: !Ref DoomImageArn
+        PAIRPUTER_IMAGE_REGISTRY: !Ref CapsuleRegistryJson
+        PAIRPUTER_CAPSULE_MANIFEST: !Ref CapsuleManifestJson
+        PAIRPUTER_HOST_CLIENT_MAP: !Sub '{"${CodexClientId}":"codex","${ChatGPTClientId}":"chatgpt","${ClaudeClientId}":"claude","${M2MClientId}":"m2m"}'
+        # Defense-in-depth JWT verification in the container (belt to AgentCore's CustomJWTAuthorizer):
+        # the OIDC discovery URL -> JWKS the server re-verifies the token signature/iss/exp against.
+        PAIRPUTER_JWT_DISCOVERY_URL: !Ref DiscoveryUrl
+        PAIRPUTER_INGRESS_NETWORK_CONNECTORS: !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:ALL_INGRESS"
+        PAIRPUTER_EGRESS_NETWORK_CONNECTORS: !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+        AWS_REGION: !Ref AWS::Region
+        PAIRPUTER_VIDEO_RELAY_URL: !Ref RelayUrl
+        PAIRPUTER_SESSION_SECRET_ARN: !Ref RelaySessionSecretArn
+        PAIRPUTER_CLOUDFRONT_SIGNING_PRIVATE_KEY_SECRET_ARN: !Ref CloudFrontSigningPrivateKeySecretArn
+        PAIRPUTER_CLOUDFRONT_PUBLIC_KEY_ID: !Ref CloudFrontPublicKeyId
+        PAIRPUTER_RELAY_CLUSTER: !Ref RelayClusterName
+        PAIRPUTER_RELAY_SERVICE: !Ref RelayServiceName
+        PAIRPUTER_RELAY_TARGET_GROUP_ARN: !Ref RelayTargetGroupArn
+        PAIRPUTER_SESSION_TABLE: !Ref SessionTableName
+        PAIRPUTER_RELAY_WARM_SECONDS: !Sub "${RelayWarmSeconds}"
+        PAIRPUTER_TENANT_STORAGE_BUCKET: !Ref TenantStorageBucket
+      LifecycleConfiguration:
+        IdleRuntimeSessionTimeout: 900
+        MaxLifetime: 3600
+      RequestHeaderConfiguration:
+        RequestHeaderAllowlist:
+          - Authorization
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Ref DiscoveryUrl
+          AllowedClients:
+            - !Ref M2MClientId
+            - !Ref CodexClientId
+            - !Ref ChatGPTClientId
+            - !Ref ClaudeClientId
+          AllowedScopes:
+            - !Ref RequiredScope
+
+  # --- Custom runtime (Public image mode): the native CFN resource's ContainerUri schema rejects ------
+  # public.ecr.aws, but the AgentCore API accepts it. This Lambda wraps create/update/delete-agent-runtime.
+  CustomRuntimeRole:
+    Type: AWS::IAM::Role
+    Condition: UseCustom
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CustomAgentCoreRuntime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Sid: AgentCoreRuntimeLifecycle
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:CreateAgentRuntime
+                  - bedrock-agentcore:UpdateAgentRuntime
+                  - bedrock-agentcore:DeleteAgentRuntime
+                  - bedrock-agentcore:GetAgentRuntime
+                  - bedrock-agentcore:ListAgentRuntimes
+                  # CreateAgentRuntime provisions a default endpoint + a workload identity under the hood,
+                  # so those perms are required too (verified by probing the scoped role against the API).
+                  - bedrock-agentcore:CreateAgentRuntimeEndpoint
+                  - bedrock-agentcore:UpdateAgentRuntimeEndpoint
+                  - bedrock-agentcore:DeleteAgentRuntimeEndpoint
+                  - bedrock-agentcore:GetAgentRuntimeEndpoint
+                  - bedrock-agentcore:ListAgentRuntimeEndpoints
+                  - bedrock-agentcore:CreateWorkloadIdentity
+                  - bedrock-agentcore:GetWorkloadIdentity
+                  - bedrock-agentcore:DeleteWorkloadIdentity
+                Resource: "*"
+              # Must pass the controller role to the AgentCore service (scoped to that one role).
+              - Sid: PassControllerRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt ControllerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: bedrock-agentcore.amazonaws.com
+
+  CustomRuntimeFunction:
+    Type: AWS::Lambda::Function
+    Condition: UseCustom
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt CustomRuntimeRole.Arn
+      Timeout: 600
+      Code:
+        ZipFile: |
+          const https=require("https");
+          const {BedrockAgentCoreControlClient,CreateAgentRuntimeCommand,UpdateAgentRuntimeCommand,DeleteAgentRuntimeCommand,GetAgentRuntimeCommand,ListAgentRuntimesCommand}=require("@aws-sdk/client-bedrock-agentcore-control");
+          const ac=new BedrockAgentCoreControlClient({});
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          async function waitReady(id,ctx){for(let i=0;i<40;i++){let g=await ac.send(new GetAgentRuntimeCommand({agentRuntimeId:id}));let s=g.status;if(s==="READY")return g;if(s==="CREATE_FAILED"||s==="UPDATE_FAILED"||s==="DELETE_FAILED"||s==="FAILED")throw new Error("runtime "+id+" -> "+s+" "+(g.statusReason||g.reasonCode||""));if(ctx.getRemainingTimeInMillis()<45000)return g;await sleep(10000);}return null;}
+          function spec(p){return {roleArn:p.RoleArn,agentRuntimeArtifact:{containerConfiguration:{containerUri:p.ContainerUri}},networkConfiguration:{networkMode:"PUBLIC"},protocolConfiguration:{serverProtocol:"MCP"},environmentVariables:p.EnvironmentVariables||{},lifecycleConfiguration:{idleRuntimeSessionTimeout:900,maxLifetime:3600},requestHeaderConfiguration:{requestHeaderAllowlist:["Authorization"]},authorizerConfiguration:{customJWTAuthorizer:{discoveryUrl:p.DiscoveryUrl,allowedClients:p.AllowedClients,allowedScopes:p.AllowedScopes}}};}
+          exports.handler=async(e,c)=>{let p=e.ResourceProperties||{};let id=e.PhysicalResourceId;try{
+            if(e.RequestType==="Delete"){if(id&&id.indexOf("-")>0){try{await ac.send(new DeleteAgentRuntimeCommand({agentRuntimeId:id}));}catch(x){if(!/ResourceNotFound|not found/i.test(String(x)))throw x;}}return send(e,c,"SUCCESS",{},id||"none");}
+            if(e.RequestType==="Create"){let q=await ac.send(new ListAgentRuntimesCommand({}));let old=(q.agentRuntimes||[]).find(x=>x.agentRuntimeName===p.RuntimeName);let rid;if(old){rid=old.agentRuntimeId;await ac.send(new UpdateAgentRuntimeCommand({agentRuntimeId:rid,...spec(p)}));}else{let r=await ac.send(new CreateAgentRuntimeCommand({agentRuntimeName:p.RuntimeName,...spec(p)}));rid=r.agentRuntimeId;}await waitReady(rid,c);return send(e,c,"SUCCESS",{RuntimeId:rid},rid);}
+            // Update in place. If a prior native-provider handoff deleted the old physical id,
+            // re-adopt the runtime by name (or create it if absent) and return its new id.
+            let rid=id;try{await ac.send(new UpdateAgentRuntimeCommand({agentRuntimeId:rid,...spec(p)}));}catch(x){if(!/ResourceNotFound|not found/i.test(String(x)))throw x;let q=await ac.send(new ListAgentRuntimesCommand({}));let old=(q.agentRuntimes||[]).find(z=>z.agentRuntimeName===p.RuntimeName);if(old){rid=old.agentRuntimeId;await ac.send(new UpdateAgentRuntimeCommand({agentRuntimeId:rid,...spec(p)}));}else{let r=await ac.send(new CreateAgentRuntimeCommand({agentRuntimeName:p.RuntimeName,...spec(p)}));rid=r.agentRuntimeId;}}await waitReady(rid,c);return send(e,c,"SUCCESS",{RuntimeId:rid},rid);
+          }catch(x){return send(e,c,"FAILED",{Error:String(x.stack||x)},id||"none");}};
+          function send(e,c,s,d,id){let b=JSON.stringify({Status:s,Reason:(d.Error||"ok")+" See "+c.logStreamName,PhysicalResourceId:id||c.logStreamName,StackId:e.StackId,RequestId:e.RequestId,LogicalResourceId:e.LogicalResourceId,NoEcho:false,Data:d});return new Promise((ok,fail)=>{let u=new URL(e.ResponseURL),q=https.request({hostname:u.hostname,path:u.pathname+u.search,method:"PUT",headers:{"content-type":"","content-length":Buffer.byteLength(b)}},r=>{r.on("data",()=>{});r.on("end",ok)});q.on("error",fail);q.write(b);q.end()})}
+
+  McpRuntimeCustom:
+    Type: Custom::PairputerAgentCoreRuntime
+    Condition: UseCustom
+    Properties:
+      ServiceToken: !GetAtt CustomRuntimeFunction.Arn
+      ProviderRevision: "3"
+      RuntimeName: !Ref RuntimeName
+      RoleArn: !GetAtt ControllerRole.Arn
+      ContainerUri: !Ref ContainerUri
+      DiscoveryUrl: !Ref DiscoveryUrl
+      AllowedClients:
+        - !Ref M2MClientId
+        - !Ref CodexClientId
+        - !Ref ChatGPTClientId
+        - !Ref ClaudeClientId
+      AllowedScopes:
+        - !Ref RequiredScope
+      EnvironmentVariables:
+        PAIRPUTER_IMAGE_ARN: !Ref DoomImageArn
+        PAIRPUTER_IMAGE_REGISTRY: !Ref CapsuleRegistryJson
+        PAIRPUTER_CAPSULE_MANIFEST: !Ref CapsuleManifestJson
+        PAIRPUTER_HOST_CLIENT_MAP: !Sub '{"${CodexClientId}":"codex","${ChatGPTClientId}":"chatgpt","${ClaudeClientId}":"claude","${M2MClientId}":"m2m"}'
+        # Defense-in-depth JWT verification in the container (belt to AgentCore's CustomJWTAuthorizer):
+        # the OIDC discovery URL -> JWKS the server re-verifies the token signature/iss/exp against.
+        PAIRPUTER_JWT_DISCOVERY_URL: !Ref DiscoveryUrl
+        PAIRPUTER_INGRESS_NETWORK_CONNECTORS: !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:ALL_INGRESS"
+        PAIRPUTER_EGRESS_NETWORK_CONNECTORS: !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+        AWS_REGION: !Ref AWS::Region
+        PAIRPUTER_VIDEO_RELAY_URL: !Ref RelayUrl
+        PAIRPUTER_SESSION_SECRET_ARN: !Ref RelaySessionSecretArn
+        PAIRPUTER_CLOUDFRONT_SIGNING_PRIVATE_KEY_SECRET_ARN: !Ref CloudFrontSigningPrivateKeySecretArn
+        PAIRPUTER_CLOUDFRONT_PUBLIC_KEY_ID: !Ref CloudFrontPublicKeyId
+        PAIRPUTER_RELAY_CLUSTER: !Ref RelayClusterName
+        PAIRPUTER_RELAY_SERVICE: !Ref RelayServiceName
+        PAIRPUTER_RELAY_TARGET_GROUP_ARN: !Ref RelayTargetGroupArn
+        PAIRPUTER_SESSION_TABLE: !Ref SessionTableName
+        PAIRPUTER_RELAY_WARM_SECONDS: !Sub "${RelayWarmSeconds}"
+        PAIRPUTER_TENANT_STORAGE_BUCKET: !Ref TenantStorageBucket
+
+  # Registers Codex's OAuth callback URLs on the Cognito public client at deploy time,
+  # so end users need NO AWS credentials. Codex derives its redirect_uri as
+  # base64url_nopad(sha256(McpEndpoint)[:9]) appended to http://localhost:5555/callback/ .
+  CallbackRegistrarRole:
+    Type: AWS::IAM::Role
+    Condition: RegisterCallback
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: sts:AssumeRole}]
+      ManagedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]
+      Policies:
+        - PolicyName: cognito
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [cognito-idp:DescribeUserPoolClient, cognito-idp:UpdateUserPoolClient]
+                Resource: !Sub "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}"
+
+  CallbackRegistrarFn:
+    Type: AWS::Lambda::Function
+    Condition: RegisterCallback
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt CallbackRegistrarRole.Arn
+      Code:
+        # ponytail: POST the cfn response with stdlib urllib instead of the cfnresponse
+        # module — the managed python3.12 runtime doesn't bundle cfnresponse, so importing
+        # it fails at init and the stack hangs waiting for a response that never comes.
+        ZipFile: |
+          import base64, hashlib, json, boto3, urllib.request
+          def send(event, context, status, data, pid=None):
+            body = json.dumps({"Status": status, "PhysicalResourceId": pid or context.log_stream_name,
+              "StackId": event["StackId"], "RequestId": event["RequestId"],
+              "LogicalResourceId": event["LogicalResourceId"], "Data": data}).encode()
+            req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT",
+              headers={"content-type": "", "content-length": str(len(body))})
+            urllib.request.urlopen(req)
+          def handler(event, context):
+            try:
+              if event["RequestType"] == "Delete":
+                return send(event, context, "SUCCESS", {})
+              p = event["ResourceProperties"]
+              pool, client, ep = p["UserPoolId"], p["ClientId"], p["McpEndpoint"]
+              h = base64.urlsafe_b64encode(hashlib.sha256(ep.encode()).digest()[:9]).decode().rstrip("=")
+              cbs = ["http://localhost:5555/callback", "http://localhost:5555/callback/" + h]
+              c = boto3.client("cognito-idp")
+              cur = c.describe_user_pool_client(UserPoolId=pool, ClientId=client)["UserPoolClient"]
+              merged = sorted(set(cur.get("CallbackURLs", [])) | set(cbs))
+              # Preserve every other OAuth setting; only touch callback URLs.
+              c.update_user_pool_client(
+                UserPoolId=pool, ClientId=client, CallbackURLs=merged,
+                AllowedOAuthFlows=cur.get("AllowedOAuthFlows", []),
+                AllowedOAuthScopes=cur.get("AllowedOAuthScopes", []),
+                AllowedOAuthFlowsUserPoolClient=cur.get("AllowedOAuthFlowsUserPoolClient", False),
+                SupportedIdentityProviders=cur.get("SupportedIdentityProviders", ["COGNITO"]))
+              send(event, context, "SUCCESS", {"CallbackHash": h}, pid=client)
+            except Exception as e:
+              send(event, context, "FAILED", {"Error": str(e)})
+
+  CallbackRegistration:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: RegisterCallback
+    Properties:
+      ServiceToken: !GetAtt CallbackRegistrarFn.Arn
+      UserPoolId: !Ref UserPoolId
+      ClientId: !Ref CodexClientId
+      McpEndpoint: !If
+        - UseCustom
+        - !Sub ["https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A${AWS::Region}%3A${AWS::AccountId}%3Aruntime%2F${R}/invocations?qualifier=DEFAULT", {R: !GetAtt McpRuntimeCustom.RuntimeId}]
+        - !Sub "https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A${AWS::Region}%3A${AWS::AccountId}%3Aruntime%2F${McpRuntime}/invocations?qualifier=DEFAULT"
+
+Outputs:
+  McpRuntimeId:
+    Value: !If [UseCustom, !GetAtt McpRuntimeCustom.RuntimeId, !Ref McpRuntime]
+  McpRuntimeArn:
+    Value: !If
+      - UseCustom
+      - !Sub ["arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/${R}", {R: !GetAtt McpRuntimeCustom.RuntimeId}]
+      - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/${McpRuntime}"
+  McpEndpoint:
+    Value: !If
+      - UseCustom
+      - !Sub ["https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A${AWS::Region}%3A${AWS::AccountId}%3Aruntime%2F${R}/invocations?qualifier=DEFAULT", {R: !GetAtt McpRuntimeCustom.RuntimeId}]
+      - !Sub "https://bedrock-agentcore.${AWS::Region}.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3A${AWS::Region}%3A${AWS::AccountId}%3Aruntime%2F${McpRuntime}/invocations?qualifier=DEFAULT"
+  CodexCallbackHash:
+    Value: !If [RegisterCallback, !GetAtt CallbackRegistration.CallbackHash, ""]
+  ControllerRoleArn:
+    Value: !GetAtt ControllerRole.Arn
