@@ -311,7 +311,12 @@ detect_doom_stack_ownership() {
   if [[ "${error_text}" == *"(ValidationError)"* ]]; then
     local lower_error
     lower_error="$(printf '%s' "${error_text}" | tr '[:upper:]' '[:lower:]')"
+    # DescribeStackResource phrases an absent stack two ways: "Stack with id <arn> does not exist"
+    # (when the stack once existed / by id) AND "Stack '<name>' does not exist" (first-time deploy,
+    # by name). Match BOTH — a fresh deploy hits the second form, and matching only the first made
+    # every first-ever deploy abort with "unable to determine ... ownership".
     if [[ "${lower_error}" == *"stack with id "*" does not exist"* ||
+          "${lower_error}" == *"stack "*" does not exist"* ||
           "${lower_error}" == *"resource "*" does not exist for stack "* ||
           "${lower_error}" == *"logical resource id "*" doesn't exist in stack "* ]]; then
       printf '%s\n' "absent"
