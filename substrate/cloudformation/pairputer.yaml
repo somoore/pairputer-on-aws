@@ -35,14 +35,14 @@ Parameters:
   # (keyless cosign, signed as Pairputer/pairputer-internal). Verify with scripts/verify-images.sh.
   ContainerUri:
     Type: String
-    Default: "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:924dba205d2356d16c76731e099c1e9d012c163d874fe877e57c7acacf4f915d"
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:665fcdbcdc245f18c68be220cf216440ab1772eb2a8aee3be5036238a44f5193"
     Description: >
       Public-mode MCP image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
       Verify out of band with scripts/verify-images.sh. (Private mode uses PrivateMcpContainerUri instead.)
     AllowedPattern: '^public\.ecr\.aws/[a-z0-9][a-z0-9._-]*/[^@]+@sha256:[0-9a-f]{64}$'
   RelayContainerUri:
     Type: String
-    Default: "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:19bfb0b1f64932e005c085afb415505d7206b6b57b657250d6a81a9c37120f9b"
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:7340635637cb1aa4644a90da4644986d708260752fa363522321f33710b69176"
     Description: >
       Public-mode relay image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
       (Private mode uses PrivateRelayContainerUri instead.)
@@ -72,7 +72,7 @@ Parameters:
     # Public agent-doom build context (WAD-free, integrity-hashed — filename embeds its tree SHA-256).
     # Published to pairputer-launch-<account> with a CloudFormation-only read policy (anon GET 403).
     # Republish with package-doom-image.sh + s3 cp; deploy.sh supplies its own for CLI deploys.
-    Default: "s3://pairputer-launch/pairputer/microvm-image/pairputer-doom-context-d3160aa750c221da2609a1a0a205ff15f5eb3699dcdf67ea95089577d24301a0.zip"
+    Default: "s3://pairputer-launch/pairputer/microvm-image/pairputer-doom-context-72b69270056f65e9a800a2d5f6f5407a28fbba14bd10b63ae6cf9e7c22185c73.zip"
     Description: >
       S3 URI for the WAD-free DOOM MicroVM build context zip (used only when building a bundled image
       in-stack). Defaults to the public agent-doom context. Required unless DoomImageArnOverride is set.

@@ -31,8 +31,8 @@ TRUSTED_ROOT="${PAIRPUTER_TRUSTED_ROOT:-${HERE}/sigstore-trusted-root.json}"
 
 # --- The digests the template pins today. Keep in sync with substrate/cloudformation/pairputer.yaml. ------
 DEFAULT_IMAGES=(
-  "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:924dba205d2356d16c76731e099c1e9d012c163d874fe877e57c7acacf4f915d"
-  "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:19bfb0b1f64932e005c085afb415505d7206b6b57b657250d6a81a9c37120f9b"
+  "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:665fcdbcdc245f18c68be220cf216440ab1772eb2a8aee3be5036238a44f5193"
+  "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:7340635637cb1aa4644a90da4644986d708260752fa363522321f33710b69176"
 )
 
 command -v cosign >/dev/null || { echo "ERROR: cosign not found. See https://docs.sigstore.dev/cosign/installation"; exit 2; }
