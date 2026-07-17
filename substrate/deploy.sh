@@ -568,6 +568,32 @@ while :; do
     echo "==> Deploy complete."
     break
   fi
+
+  # The `aws cloudformation deploy` waiter gives up after ~60 min and returns non-zero — but a slow
+  # resource (a CloudFront VPC-origin distribution routinely takes 40-60 min) means the STACK is
+  # still creating server-side, not failed. Don't report failure on a CLI-waiter timeout: if the
+  # stack is still *_IN_PROGRESS, re-attach a waiter and let CloudFormation finish.
+  CURRENT_STATE="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
+    --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
+  if [[ "${CURRENT_STATE}" == *"_IN_PROGRESS" ]]; then
+    echo "==> The deploy CLI stopped waiting, but the stack is still ${CURRENT_STATE} (a slow resource" >&2
+    echo "    like a CloudFront distribution can take 40-60 min). Re-attaching a waiter..." >&2
+    if aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" 2>/dev/null \
+       || aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" 2>/dev/null; then
+      echo "==> Deploy complete (after re-waiting on a slow resource)."
+      break
+    fi
+    # waiter returned non-zero: re-read the state — success or a genuine failure will now be terminal.
+    CURRENT_STATE="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
+      --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
+    if [[ "${CURRENT_STATE}" == "CREATE_COMPLETE" || "${CURRENT_STATE}" == "UPDATE_COMPLETE" ]]; then
+      echo "==> Deploy complete."
+      break
+    fi
+    DEPLOY_OUTPUT="${DEPLOY_OUTPUT}
+stack ended in ${CURRENT_STATE} after re-waiting"
+  fi
+
   if echo "${DEPLOY_OUTPUT}" | grep -qiE "No changes to deploy|No updates are to be performed"; then
     echo "==> No updates to perform; stack already up to date."
     break
