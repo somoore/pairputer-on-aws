@@ -113,20 +113,36 @@ run_capture_last() {
   rm -f "${out}"
 }
 
-if [[ -z "${CONTAINER_URI}" ]]; then
-  echo "==> No ContainerUri given; running build-and-push.sh in ${AWS_REGION}..."
-  if ! CONTAINER_URI="$(run_capture_last "${SCRIPT_DIR}/build-and-push.sh")" || [[ -z "${CONTAINER_URI}" ]]; then
-    echo "ERROR: build-and-push.sh failed (is the Docker daemon running?). Aborting deploy." >&2
-    exit 1
-  fi
+# Image source. Default Private = build the MCP + relay images from source and push to the deployer's
+# private ECR (needs a working local Docker). PAIRPUTER_IMAGE_SOURCE=Public deploys the SIGNED public
+# ECR images the template already pins (ContainerUri/RelayContainerUri defaults) — NO local Docker
+# build. Public mode is the same images the 1-click console path uses; use it for a Docker-less deploy
+# or to smoke-test the shipping path. (The DOOM MicroVM context is still packaged locally via zip/s3 —
+# that step needs no Docker.)
+IMAGE_SOURCE="${PAIRPUTER_IMAGE_SOURCE:-Private}"
+if [[ "${IMAGE_SOURCE}" != "Private" && "${IMAGE_SOURCE}" != "Public" ]]; then
+  echo "ERROR: PAIRPUTER_IMAGE_SOURCE must be Private or Public." >&2
+  exit 1
 fi
 
-if [[ -z "${RELAY_CONTAINER_URI}" ]]; then
-  echo "==> No RelayContainerUri given; running build-and-push-relay.sh in ${AWS_REGION}..."
-  if ! RELAY_CONTAINER_URI="$(run_capture_last "${SCRIPT_DIR}/build-and-push-relay.sh")" || [[ -z "${RELAY_CONTAINER_URI}" ]]; then
-    echo "ERROR: build-and-push-relay.sh failed (is the Docker daemon running?). Aborting deploy." >&2
-    exit 1
+if [[ "${IMAGE_SOURCE}" == "Private" ]]; then
+  if [[ -z "${CONTAINER_URI}" ]]; then
+    echo "==> No ContainerUri given; running build-and-push.sh in ${AWS_REGION}..."
+    if ! CONTAINER_URI="$(run_capture_last "${SCRIPT_DIR}/build-and-push.sh")" || [[ -z "${CONTAINER_URI}" ]]; then
+      echo "ERROR: build-and-push.sh failed (is the Docker daemon running?). Aborting deploy." >&2
+      exit 1
+    fi
   fi
+
+  if [[ -z "${RELAY_CONTAINER_URI}" ]]; then
+    echo "==> No RelayContainerUri given; running build-and-push-relay.sh in ${AWS_REGION}..."
+    if ! RELAY_CONTAINER_URI="$(run_capture_last "${SCRIPT_DIR}/build-and-push-relay.sh")" || [[ -z "${RELAY_CONTAINER_URI}" ]]; then
+      echo "ERROR: build-and-push-relay.sh failed (is the Docker daemon running?). Aborting deploy." >&2
+      exit 1
+    fi
+  fi
+else
+  echo "==> ImageSource=Public: using the signed public ECR images pinned in the template (no local build)."
 fi
 
 NETWORKING_MODE="${PAIRPUTER_NETWORKING_MODE:-CreateVpcFckNat}"
@@ -414,10 +430,11 @@ echo "==> PairputerDebug:     ${PAIRPUTER_DEBUG}"
 echo "==> SelftestEnforce:  ${INPUT_SELFTEST_ENFORCE}"
 
 PARAMETER_OVERRIDES=(
-  # deploy.sh builds + pushes images to the deployer's PRIVATE ECR, so it deploys in Private image mode
-  # and hands them in as the Private* params. (Public mode = the signed public-ECR defaults, used by the
-  # 1-click console path, which doesn't run this script.)
-  "ImageSource=Private"
+  # Private mode (default): images built from source into the deployer's PRIVATE ECR, handed in as the
+  # Private* params. Public mode: ImageSource=Public and the template uses its pinned SIGNED public-ECR
+  # defaults (ContainerUri/RelayContainerUri) — the Private* params stay empty (the template's
+  # Require* conditions only enforce them in Private mode).
+  "ImageSource=${IMAGE_SOURCE}"
   "BundleReferenceCapsule=${BUNDLE_REFERENCE_CAPSULE}"
   "PrivateMcpContainerUri=${CONTAINER_URI}"
   "PrivateRelayContainerUri=${RELAY_CONTAINER_URI}"
