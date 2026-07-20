@@ -12,18 +12,18 @@ pairputer is a deployable *substrate*: it runs an interactive **capsule** (a Lam
 
 **One server, one widget, three hosts — all live and human-confirmed:** **OpenAI Codex**, **ChatGPT** (web + desktop), and **Claude** (web + desktop). Once connected, open the reference capsule with a single prompt:
 
-> Use the pairputer app to open the Agent DOOM capsule (play_capsule) so I can watch it live.
+> Use the pairputer app to open the Pairputer Workbench (play_capsule) so we can share a live desktop.
 
 Per-host connector setup: [`docs/hosts/codex.md`](./docs/hosts/codex.md) · [`docs/hosts/chatgpt.md`](./docs/hosts/chatgpt.md) · [`docs/hosts/claude.md`](./docs/hosts/claude.md).
 
-The first reference capsule is **Hellbox** — real DOOM in a MicroVM. It proves the hard part: realtime streaming + input, into the chat, with nothing running on your laptop but the chat app.
+The bundled reference capsule is the **Pairputer Workbench** — a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. **Agent DOOM** — real DOOM with an in-VM agent bridge — remains available as an optional cartridge: `substrate/deploy-capsule.sh agent-doom`.
 
 ## Why pairputer
 
 - **Runs in *your* AWS account.** No third-party SaaS holds your session; no static credentials leave your machine.
 - **True 1-click.** Signed, digest-pinned public images + a public capsule build context mean zero local build.
 - **Secure by construction.** OAuth (Cognito PKCE), private VPC data plane behind CloudFront + WAF, cosign-signed images with SLSA provenance you can verify yourself.
-- **Bring your own workload.** DOOM is just the demo — the substrate is capsule-agnostic.
+- **Bring your own workload.** The Workbench is just the default — the substrate is capsule-agnostic (Agent DOOM ships as an optional cartridge).
 
 ## Deploy it
 
@@ -33,7 +33,7 @@ Two paths. Both land in your account, `us-east-1`.
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://pairputer-launch.s3.amazonaws.com/templates/pairputer.yaml&stackName=pairputer)
 
-Click the button, review the parameters, deploy. **Zero inputs required** — it defaults to pairputer's signed public images and a playable DOOM capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the DOOM MicroVM image in your account.
+Click the button, review the parameters, deploy. **Zero inputs required** — it defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account.
 
 After it finishes, you get an **admin invite email** with your temporary password and the exact steps to connect Codex — including a one-line setup command. Then `codex mcp login pairputer` and play.
 
@@ -53,7 +53,7 @@ substrate/deploy.sh
 ## Options worth knowing
 
 - **Image source** *(first parameter)* — `Public` (default, our signed images) or `Private` (your own private-ECR images; leave URIs blank to auto-copy ours into your account, verified first).
-- **Bundle reference capsule** *(default on)* — ships DOOM so you have something playable. Turn it off for a **bare substrate** with no capsule.
+- **Bundle reference capsule** *(default on)* — ships the Pairputer Workbench so the substrate is useful out of the box. Turn it off for a **bare substrate** with no capsule.
 
 ## Remove everything
 

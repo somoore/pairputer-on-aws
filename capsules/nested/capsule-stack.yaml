@@ -92,9 +92,19 @@ Parameters:
       SSM Parameter name of the capsule's atomic current-release pointer. The pointer names an immutable
       release record that pins one manifest digest to one ACTIVE MicroVM image version. Empty is accepted
       only for legacy/Tier-0 capsules; release-aware runtimes fail closed for new launches without it.
+  StageManifestFromContext:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      "true" = an in-stack custom resource reads capsule.manifest.json out of the context zip in S3 and
+      stages it into chunked immutable SSM parameters itself (the exact layout deploy-capsule.sh stages
+      script-side), so a PURE CONSOLE deploy needs no local tooling. Leave CapsuleManifestSsmParam/
+      CapsuleManifestDigest/CapsuleReleaseSsmParam empty in this mode — they are derived.
 
 Rules:
   CapsuleReleaseMetadataIsComplete:
+    RuleCondition: !Equals [!Ref StageManifestFromContext, "false"]
     Assertions:
       - Assert: !Or
           - !Not [!Equals [!Ref CapsuleManifestSsmParam, ""]]
@@ -109,10 +119,21 @@ Rules:
             - !Not [!Equals [!Ref CapsuleReleaseSsmParam, ""]]
             - !Not [!Equals [!Ref CapsuleContextSha256, ""]]
         AssertDescription: A manifest requires its digest, current-release pointer, and context digest.
+  StagerModeDerivesReleaseMetadata:
+    RuleCondition: !Equals [!Ref StageManifestFromContext, "true"]
+    Assertions:
+      - Assert: !And
+          - !Equals [!Ref CapsuleManifestSsmParam, ""]
+          - !Equals [!Ref CapsuleManifestDigest, ""]
+          - !Equals [!Ref CapsuleReleaseSsmParam, ""]
+        AssertDescription: StageManifestFromContext=true derives all release metadata from the context zip; leave the manifest/release parameters empty.
 
 Conditions:
   UseDefaultBaseImageArn: !Equals [!Ref CapsuleBaseImageArn, ""]
-  PublishCapsuleRelease: !Not [!Equals [!Ref CapsuleManifestSsmParam, ""]]
+  StageFromContext: !Equals [!Ref StageManifestFromContext, "true"]
+  PublishCapsuleRelease: !Or
+    - !Not [!Equals [!Ref CapsuleManifestSsmParam, ""]]
+    - !Condition StageFromContext
 
 Resources:
   MicrovmImageLogGroup:
@@ -155,6 +176,145 @@ Resources:
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
                 Resource: "*"
+
+  # --- In-stack manifest stager (console/1-click path) ----------------------------------------------
+  # Reads capsule.manifest.json (validated compact JSON, embedded by package-doom-image.sh) out of the
+  # context zip in S3 and stages it into SSM in EXACTLY the layout deploy-capsule.sh stages script-side:
+  # gzip+base64 value, chunked into immutable /partN parameters above 8 KiB with a chunked:v1 header,
+  # content-addressed primary path, parts-first write order, fail-closed immutable collision checks.
+  # This is what lets a pure console deploy bundle a capsule whose manifest exceeds the 4 KB env budget
+  # (the Workbench's is ~10.5 KB gzipped) with no local tooling.
+  ManifestStagerRole:
+    Type: AWS::IAM::Role
+    Condition: StageFromContext
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PairputerManifestStager
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${CapsuleContextBucket}/*"
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:PutParameter, ssm:AddTagsToResource]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/pairputer/capsules/${CapsuleId}/*"
+
+  ManifestStagerFunction:
+    Type: AWS::Lambda::Function
+    Condition: StageFromContext
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ManifestStagerRole.Arn
+      Timeout: 120
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          import base64, gzip, hashlib, io, json, re, urllib.request, zipfile, boto3
+          from botocore.exceptions import ClientError
+          def send(event, context, status, data, physical_id):
+              body = json.dumps({"Status": status, "Reason": data.get("Error", "ok")[:1000],
+                  "PhysicalResourceId": physical_id, "StackId": event["StackId"],
+                  "RequestId": event["RequestId"], "LogicalResourceId": event["LogicalResourceId"],
+                  "NoEcho": False, "Data": data}).encode()
+              req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT",
+                  headers={"content-type": "", "content-length": str(len(body))})
+              urllib.request.urlopen(req, timeout=20)
+          def immutable_put(ssm, name, value, capsule_id):
+              try:
+                  old = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+                  if old != value:
+                      raise ValueError("immutable SSM collision at " + name)
+                  return
+              except ClientError as exc:
+                  if exc.response.get("Error", {}).get("Code") != "ParameterNotFound":
+                      raise
+              try:
+                  ssm.put_parameter(Name=name, Type="String", Tier="Intelligent-Tiering", Value=value,
+                      Overwrite=False, Tags=[{"Key":"pairputer:capsule","Value":"true"},
+                          {"Key":"pairputer:capsule-id","Value":capsule_id},
+                          {"Key":"pairputer:immutable","Value":"true"}])
+              except ClientError as exc:
+                  if exc.response.get("Error", {}).get("Code") != "ParameterAlreadyExists":
+                      raise
+                  old = ssm.get_parameter(Name=name)["Parameter"]["Value"]
+                  if old != value:
+                      raise ValueError("immutable SSM collision at " + name)
+          def handler(event, context):
+              p = event.get("ResourceProperties", {})
+              capsule_id = p.get("CapsuleId", "")
+              physical_id = event.get("PhysicalResourceId") or ("PairputerManifestStager:" + capsule_id)
+              try:
+                  if event.get("RequestType") == "Delete":
+                      return send(event, context, "SUCCESS", {"Deleted": "immutable metadata retained"}, physical_id)
+                  ctx_uri = p["ContextUri"]
+                  bucket = p["ContextBucket"]
+                  m = re.match(r"^s3://([^/]+)/(.+)$", ctx_uri)
+                  if not m:
+                      raise ValueError("ContextUri is not a s3:// URI")
+                  if m.group(1) != bucket:
+                      raise ValueError("ContextUri bucket does not match ContextBucket")
+                  key = m.group(2)
+                  ctx_sha = p.get("ContextSha256") or ""
+                  if not ctx_sha:
+                      fm = re.search(r"([a-f0-9]{64})\.zip$", key)
+                      if not fm:
+                          raise ValueError("ContextSha256 not provided and not derivable from the context filename")
+                      ctx_sha = fm.group(1)
+                  blob = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+                  with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+                      try:
+                          manifest = json.loads(zf.read("capsule.manifest.json"))
+                      except KeyError:
+                          raise ValueError("context zip has no capsule.manifest.json; repackage with package-doom-image.sh")
+                  if (manifest.get("capsule") or {}).get("id") != capsule_id:
+                      raise ValueError("capsule.manifest.json id does not match CapsuleId")
+                  manifest["capsule"]["deployment"] = {"contextSha256": ctx_sha, "contextUri": ctx_uri}
+                  raw = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()
+                  value = "gzip+base64:" + base64.b64encode(gzip.compress(raw, mtime=0)).decode()
+                  parts = []
+                  if len(value) > 8192:
+                      full_sha = hashlib.sha256(value.encode()).hexdigest()
+                      parts = [value[i:i+7500] for i in range(0, len(value), 7500)]
+                      if not (1 <= len(parts) <= 16):
+                          raise ValueError("capsule manifest needs %d chunks; 16 is the ceiling" % len(parts))
+                      value = "chunked:v1:%d:%s" % (len(parts), full_sha)
+                  digest_hex = hashlib.sha256(value.encode()).hexdigest()
+                  manifest_param = "/pairputer/capsules/%s/manifests/sha256-%s" % (capsule_id, digest_hex)
+                  ssm = boto3.client("ssm")
+                  # Parts first, primary last: a reader that can see the header can already fetch every part.
+                  for i, part in enumerate(parts):
+                      immutable_put(ssm, "%s/part%d" % (manifest_param, i), part, capsule_id)
+                  immutable_put(ssm, manifest_param, value, capsule_id)
+                  send(event, context, "SUCCESS", {
+                      "ManifestParameter": manifest_param,
+                      "ManifestDigest": "sha256:" + digest_hex,
+                      "CurrentParameter": "/pairputer/capsules/%s/current" % capsule_id,
+                      "ContextSha256": ctx_sha}, physical_id)
+              except Exception as exc:
+                  send(event, context, "FAILED", {"Error": str(exc)}, physical_id)
+
+  ManifestStager:
+    Type: Custom::PairputerManifestStager
+    Condition: StageFromContext
+    Properties:
+      ServiceToken: !GetAtt ManifestStagerFunction.Arn
+      CapsuleId: !Ref CapsuleId
+      ContextUri: !Ref CapsuleContextUri
+      ContextBucket: !Ref CapsuleContextBucket
+      ContextSha256: !Ref CapsuleContextSha256
 
   CapsuleMicrovmImage:
     Type: AWS::Lambda::MicrovmImage
@@ -224,9 +384,9 @@ Resources:
         - Key: pairputer:capsule-description
           Value: !Ref CapsuleDescription
         - Key: pairputer:capsule-manifest-ssm
-          Value: !Ref CapsuleManifestSsmParam
+          Value: !If [StageFromContext, !GetAtt ManifestStager.ManifestParameter, !Ref CapsuleManifestSsmParam]
         - Key: pairputer:capsule-release-ssm
-          Value: !Ref CapsuleReleaseSsmParam
+          Value: !If [StageFromContext, !GetAtt ManifestStager.CurrentParameter, !Ref CapsuleReleaseSsmParam]
         # Empty on a standalone capsule; set on a memory-tier sibling to fold it into its base.
         - Key: pairputer:capsule-memory-tier-of
           Value: !Ref MemoryTierOf
@@ -364,10 +524,10 @@ Resources:
       CapsuleId: !Ref CapsuleId
       ImageArn: !GetAtt CapsuleMicrovmImage.ImageArn
       ImageVersion: !GetAtt CapsuleMicrovmImage.LatestActiveImageVersion
-      ManifestParameter: !Ref CapsuleManifestSsmParam
-      ManifestDigest: !Ref CapsuleManifestDigest
-      CurrentParameter: !Ref CapsuleReleaseSsmParam
-      ContextSha256: !Ref CapsuleContextSha256
+      ManifestParameter: !If [StageFromContext, !GetAtt ManifestStager.ManifestParameter, !Ref CapsuleManifestSsmParam]
+      ManifestDigest: !If [StageFromContext, !GetAtt ManifestStager.ManifestDigest, !Ref CapsuleManifestDigest]
+      CurrentParameter: !If [StageFromContext, !GetAtt ManifestStager.CurrentParameter, !Ref CapsuleReleaseSsmParam]
+      ContextSha256: !If [StageFromContext, !GetAtt ManifestStager.ContextSha256, !Ref CapsuleContextSha256]
       ContextUri: !Ref CapsuleContextUri
 
   # --- Foolproof teardown: terminate MicroVMs before the image is deleted ---------------------------
@@ -499,7 +659,7 @@ Outputs:
     Value: !GetAtt CapsuleMicrovmImage.LatestActiveImageVersion
   CapsuleReleaseSsmParameter:
     Description: Atomic current-release pointer advertised by this capsule image.
-    Value: !Ref CapsuleReleaseSsmParam
+    Value: !If [StageFromContext, !GetAtt ManifestStager.CurrentParameter, !Ref CapsuleReleaseSsmParam]
   CapsuleReleaseDigest:
     Condition: PublishCapsuleRelease
     Description: Digest of the immutable release atomically committed by this stack update.

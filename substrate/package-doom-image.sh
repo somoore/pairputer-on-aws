@@ -23,7 +23,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONTEXT_DIR="${PAIRPUTER_MICROVM_CONTEXT_DIR:-${SCRIPT_DIR}/../capsules/${PAIRPUTER_REFERENCE_CAPSULE:-agent-doom}}"
+CONTEXT_DIR="${PAIRPUTER_MICROVM_CONTEXT_DIR:-${SCRIPT_DIR}/../capsules/${PAIRPUTER_REFERENCE_CAPSULE:-computer-use-desktop}}"
 UPLOAD_BUCKET="${1:-${PAIRPUTER_DOOM_CONTEXT_BUCKET:-}}"
 UPLOAD_PREFIX="${2:-${PAIRPUTER_DOOM_CONTEXT_PREFIX:-pairputer/microvm-image}}"
 OUTPUT_DIR="${PAIRPUTER_DOOM_CONTEXT_OUT_DIR:-${SCRIPT_DIR}/.artifacts}"
@@ -128,6 +128,16 @@ if [[ -n "${PAIRPUTER_DOOM1_WAD_URL:-}" ]]; then
   write_wad_source_json "${STAGING}/wad-source.json"
 fi
 
+# Agent-interactive capsules ship capsule.yaml. Embed its VALIDATED compact-JSON form as
+# capsule.manifest.json so the in-stack manifest stager (capsule-stack.yaml) can register the capsule
+# from the zip alone — no YAML parser in Lambda, no 4KB env-var manifest, works for a pure console
+# 1-click. Part of the tree hash: a manifest change changes the context identity.
+if [[ -f "${STAGING}/capsule.yaml" ]]; then
+  python3 "${SCRIPT_DIR}/validate-capsule-manifest.py" "${STAGING}/capsule.yaml" > "${STAGING}/capsule.manifest.json" \
+    || { echo "ERROR: capsule.yaml failed manifest validation; refusing to package." >&2; exit 1; }
+  echo "==> Embedded validated capsule.manifest.json ($(wc -c < "${STAGING}/capsule.manifest.json" | tr -d ' ') bytes)"
+fi
+
 check_tree "${STAGING}"
 
 TREE_HASH="$(
@@ -137,7 +147,8 @@ TREE_HASH="$(
   done | shasum -a 256 | awk '{print $1}'
 )"
 
-ZIP_PATH="${PAIRPUTER_DOOM_CONTEXT_ZIP:-${OUTPUT_DIR}/pairputer-doom-context-${TREE_HASH}.zip}"
+CAPSULE_BASENAME="$(basename "${CONTEXT_DIR}")"
+ZIP_PATH="${PAIRPUTER_DOOM_CONTEXT_ZIP:-${OUTPUT_DIR}/pairputer-${CAPSULE_BASENAME}-context-${TREE_HASH}.zip}"
 rm -f "${ZIP_PATH}"
 
 (
@@ -152,7 +163,7 @@ echo "==> Zip:             ${ZIP_PATH}"
 if [[ -n "${UPLOAD_BUCKET}" ]]; then
   UPLOAD_PREFIX="${UPLOAD_PREFIX#/}"
   UPLOAD_PREFIX="${UPLOAD_PREFIX%/}"
-  DEST="s3://${UPLOAD_BUCKET}/${UPLOAD_PREFIX}/pairputer-doom-context-${TREE_HASH}.zip"
+  DEST="s3://${UPLOAD_BUCKET}/${UPLOAD_PREFIX}/pairputer-${CAPSULE_BASENAME}-context-${TREE_HASH}.zip"
   echo "==> Uploading:       ${DEST}"
   aws s3 cp "${ZIP_PATH}" "${DEST}" --only-show-errors
   echo "${DEST}"

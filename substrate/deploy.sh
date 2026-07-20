@@ -180,11 +180,12 @@ BUNDLE_REFERENCE_CAPSULE="${PAIRPUTER_BUNDLE_REFERENCE_CAPSULE:-true}"
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" != "true" && "${BUNDLE_REFERENCE_CAPSULE}" != "false" ]]; then
   echo "ERROR: PAIRPUTER_BUNDLE_REFERENCE_CAPSULE must be true or false." >&2; exit 1
 fi
-# The built-in cartridge dir under capsules/. agent-doom (Tier 1/2: streams DOOM AND exposes agent tools
-# like drive_goal). hellbox-doom is the older Tier 0 stream-only capsule (0 agent tools). One source of
-# truth: exported so package-doom-image.sh packages the SAME dir this script reads the manifest from —
-# a mismatch is what shipped a toolless Hellbox while the chat said "Agent DOOM".
-REFERENCE_CAPSULE="${PAIRPUTER_REFERENCE_CAPSULE:-agent-doom}"
+# The built-in cartridge dir under capsules/. Default: computer-use-desktop (the Pairputer Workbench —
+# the flagship shared dev desktop). Agent DOOM remains available as a separate cartridge
+# (deploy-capsule.sh agent-doom) or as the bundled capsule via PAIRPUTER_REFERENCE_CAPSULE=agent-doom.
+# One source of truth: exported so package-doom-image.sh packages the SAME dir this script reads the
+# manifest from — a mismatch is what shipped a toolless Hellbox while the chat said "Agent DOOM".
+REFERENCE_CAPSULE="${PAIRPUTER_REFERENCE_CAPSULE:-computer-use-desktop}"
 CAPSULE_CONTEXT_DIR="${PAIRPUTER_MICROVM_CONTEXT_DIR:-${SCRIPT_DIR}/../capsules/${REFERENCE_CAPSULE}}"
 export PAIRPUTER_MICROVM_CONTEXT_DIR="${CAPSULE_CONTEXT_DIR}"  # package-doom-image.sh reads this
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" == "true" && ! -f "${CAPSULE_CONTEXT_DIR}/Dockerfile" ]]; then
@@ -469,47 +470,13 @@ PARAMETER_OVERRIDES=(
   "InputSelftestEnforce=${INPUT_SELFTEST_ENFORCE}"
 )
 
-# Capability manifest: if the packaged capsule context ships a capsule.yaml (an agent-interactive
-# capsule like capsules/agent-doom), convert it to JSON and pass it through so the MCP server
-# registers the agent tools it declares (interaction.md Tier 1/2). No capsule.yaml = Tier 0 deploy:
-# the parameter stays empty and no agent tools exist. Override with PAIRPUTER_CAPSULE_MANIFEST_JSON.
-# CAPSULE_CONTEXT_DIR is set above (from REFERENCE_CAPSULE) so the manifest and the packaged image agree.
-CAPSULE_MANIFEST_JSON="${PAIRPUTER_CAPSULE_MANIFEST_JSON:-}"
-# A bare substrate carries no bundled manifest — discovered cartridges supply their own via SSM.
-if [[ "${BUNDLE_REFERENCE_CAPSULE}" != "true" ]]; then CAPSULE_MANIFEST_JSON=""; fi
-if [[ "${BUNDLE_REFERENCE_CAPSULE}" == "true" && -z "${CAPSULE_MANIFEST_JSON}" && -f "${CAPSULE_CONTEXT_DIR}/capsule.yaml" ]]; then
-  CAPSULE_MANIFEST_JSON="$(python3 -c '
-import json, sys
-try:
-    import yaml
-except ImportError:
-    sys.stderr.write("WARNING: pyyaml unavailable; capsule.yaml ignored (deploying Tier 0)\n")
-    sys.exit(0)
-doc = yaml.safe_load(open(sys.argv[1])) or {}
-# AgentCore caps the total environment-variable payload at 4000 bytes.  The
-# full capsule document is retained in the immutable SSM release; the bundled
-# seed only needs the runtime contract (identity, interaction, bridge, tools,
-# IAM and safety).  Dropping prose/UX-only fields here keeps the authenticated
-# tool catalog intact without silently falling back to Tier 0.
-capsule = dict(doc.get("capsule") or doc)
-runtime_keys = ("id", "name", "interaction", "bridge", "tools", "permissions", "safety")
-runtime = {k: capsule[k] for k in runtime_keys if k in capsule}
-print(json.dumps({"capsule": runtime}, separators=(",", ":")))
-' "${CAPSULE_CONTEXT_DIR}/capsule.yaml")" || CAPSULE_MANIFEST_JSON=""
-  [[ -n "${CAPSULE_MANIFEST_JSON}" ]] && echo "==> Capability manifest: ${CAPSULE_CONTEXT_DIR}/capsule.yaml (agent tools ENABLED)"
-fi
-# CloudFormation String parameter values are capped at 4096 bytes. Preserve the complete
-# manifest (rather than silently dropping the typed tool catalog) using the server's bounded
-# gzip+base64 encoding whenever the compact JSON would exceed that transport limit.
-if [[ "${#CAPSULE_MANIFEST_JSON}" -gt 3500 && "${CAPSULE_MANIFEST_JSON}" != gzip+base64:* ]]; then
-  CAPSULE_MANIFEST_JSON="gzip+base64:$(printf '%s' "${CAPSULE_MANIFEST_JSON}" | python3 -c 'import base64,gzip,sys; print(base64.b64encode(gzip.compress(sys.stdin.buffer.read(),mtime=0)).decode())')"
-  if [[ "${#CAPSULE_MANIFEST_JSON}" -gt 4096 ]]; then
-    echo "ERROR: compressed capsule manifest is still larger than CloudFormation's 4096-byte parameter limit." >&2
-    exit 1
-  fi
-  echo "==> Capability manifest compressed for CloudFormation (${#CAPSULE_MANIFEST_JSON} bytes)"
-fi
-PARAMETER_OVERRIDES+=("CapsuleManifestJson=${CAPSULE_MANIFEST_JSON}")
+# Capability manifest: the bundled capsule now registers exactly like a cartridge — the capsule stack's
+# in-stack manifest stager reads capsule.manifest.json from the packaged context zip and stages the
+# full (chunked) manifest into SSM; the MCP discovers it by image tag. The old env-var seed
+# (PAIRPUTER_CAPSULE_MANIFEST via this parameter) capped manifests at AgentCore's 4000-byte env
+# budget and silently dropped fields to fit — the Workbench's ~35KB manifest never could. The
+# parameter stays supported for local/legacy flows via PAIRPUTER_CAPSULE_MANIFEST_JSON only.
+PARAMETER_OVERRIDES+=("CapsuleManifestJson=${PAIRPUTER_CAPSULE_MANIFEST_JSON:-}")
 # Durable per-tenant workspace storage (see docs/persistent-workspace.md). Defaults ON, backed by
 # the CFN artifacts bucket (the documented prototype store — tenant-storage/<tenantId>/ prefix,
 # IAM-scoped to that prefix only). Export PAIRPUTER_TENANT_STORAGE_BUCKET="" to disable explicitly,
@@ -530,8 +497,8 @@ def clean(v, fb):
     s = re.sub(r"\s+", " ", str(v or "")).replace(chr(34), "")
     s = s.encode("ascii", "replace").decode().replace("?", "-").strip()
     return s or fb
-print(clean(c.get("id"), "agent-doom"), clean(c.get("name"), "Agent DOOM"),
-      clean(c.get("description"), "Agent DOOM capsule"), sep="\t")
+print(clean(c.get("id"), "computer-use-desktop"), clean(c.get("name"), "Pairputer Workbench"),
+      clean(c.get("description"), "Pairputer Workbench capsule"), sep="\t")
 ' "${CAPSULE_CONTEXT_DIR}/capsule.yaml")
   PARAMETER_OVERRIDES+=("ReferenceCapsuleId=${REF_ID}" "ReferenceCapsuleName=${REF_NAME}" "ReferenceCapsuleDescription=${REF_DESC}")
   echo "==> Reference capsule: ${REF_ID} (${REF_NAME})"

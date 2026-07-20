@@ -176,12 +176,13 @@ aws cloudformation package \
 echo "==> Uploading packaged root template to s3://${LAUNCH_BUCKET}/${ROOT_KEY}..."
 aws s3 cp "${PACKAGED}" "s3://${LAUNCH_BUCKET}/${ROOT_KEY}" --region "${AWS_REGION}" >/dev/null
 
-# 4. Publish the WAD-free DOOM build context zip under pairputer/microvm-image/ so the public 1-click
+# 4. Publish the bundled capsule's build context zip under pairputer/microvm-image/ so the public 1-click
 # bundled-image build (BundleReferenceCapsule=true + ImageSource=Public) can fetch it. package-doom-image.sh
-# uploads it to <bucket>/<prefix>/pairputer-doom-context-<treehash>.zip and prints that s3:// URI. The
-# reference capsule defaults to agent-doom (PAIRPUTER_REFERENCE_CAPSULE). Skip with PAIRPUTER_SKIP_CONTEXT=1.
+# uploads it to <bucket>/<prefix>/pairputer-<capsule>-context-<treehash>.zip and prints that s3:// URI. The
+# reference capsule defaults to computer-use-desktop, the Pairputer Workbench (PAIRPUTER_REFERENCE_CAPSULE).
+# Skip with PAIRPUTER_SKIP_CONTEXT=1.
 if [[ "${PAIRPUTER_SKIP_CONTEXT:-0}" != "1" ]]; then
-  echo "==> Publishing DOOM build context to s3://${LAUNCH_BUCKET}/pairputer/microvm-image/..."
+  echo "==> Publishing bundled capsule (${PAIRPUTER_REFERENCE_CAPSULE:-computer-use-desktop}) build context to s3://${LAUNCH_BUCKET}/pairputer/microvm-image/..."
   CONTEXT_URI="$("${SCRIPT_DIR}/package-doom-image.sh" "${LAUNCH_BUCKET}" "pairputer/microvm-image" | tail -n1)"
   if [[ "${CONTEXT_URI}" != s3://* ]]; then
     echo "ERROR: package-doom-image.sh did not return an s3:// context URI (got: ${CONTEXT_URI})." >&2

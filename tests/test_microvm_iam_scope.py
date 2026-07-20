@@ -81,7 +81,7 @@ class MicrovmIamScopeTests(unittest.TestCase):
         # Relay gets the capsule ARN list (resolved from override or the built image), never "*".
         self.assertIn("CapsuleImageArns: !If", relay_stack)
         self.assertIn("UseDoomImageOverride", relay_stack)
-        self.assertIn("DoomImageStack.Outputs.DoomImageArn", relay_stack)
+        self.assertIn("DoomImageStack.Outputs.CapsuleImageArn", relay_stack)
 
         # AgentCore gets the registry JSON (id->{arn,name,description}) AND the ARN list AND the default anchor.
         self.assertIn("CapsuleRegistryJson: !If", agentcore_stack)

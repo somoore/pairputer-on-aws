@@ -47,20 +47,21 @@ Parameters:
       Public-mode relay image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
       (Private mode uses PrivateRelayContainerUri instead.)
     AllowedPattern: '^public\.ecr\.aws/[a-z0-9][a-z0-9._-]*/[^@]+@sha256:[0-9a-f]{64}$'
-  # --- Reference capsule (DOOM / Hellbox) --------------------------------------------------------------
+  # --- Bundled capsule (Pairputer Workbench by default; params keep their legacy Doom* names) ----------
   BundleReferenceCapsule:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: >
-      true (default): bundle the DOOM ("Hellbox") reference capsule so the substrate has something playable
-      out of the box (builds the MicroVM image + registers it with the MCP server). false: deploy the bare
-      pairputer substrate with no capsule — the platform runs, and capsule tools report "no capsules deployed"
-      until you register one. DOOM is a separate build/artifact; this only controls whether it ships with the substrate.
+      true (default): bundle the Pairputer Workbench — a shared disposable Linux dev desktop a human +
+      any frontier AI drive together — so the substrate is useful out of the box (builds the MicroVM
+      image + registers it with the MCP server). false: deploy the bare pairputer substrate with no
+      capsule; capsule tools report "no capsules deployed" until you register one (e.g. Agent DOOM via
+      deploy-capsule.sh agent-doom).
   DoomImageArnOverride:
     Type: String
     Default: ""
-    Description: Optional prebuilt DOOM MicroVM image ARN. Leave empty to let this stack build the image.
+    Description: Optional prebuilt bundled-capsule MicroVM image ARN. Leave empty to let this stack build the image.
     AllowedPattern: '^$|^arn:aws:lambda:[a-z0-9-]+:\d{12}:microvm-image:.+$'
   AllowDoomImageArnOverride:
     Type: String
@@ -69,13 +70,13 @@ Parameters:
     Description: Explicit opt-in required before DoomImageArnOverride can bypass the stack-managed DoomImageStack.
   DoomCodeArtifactUri:
     Type: String
-    # Public agent-doom build context (WAD-free, integrity-hashed — filename embeds its tree SHA-256).
-    # Published to pairputer-launch-<account> with a CloudFormation-only read policy (anon GET 403).
-    # Republish with package-doom-image.sh + s3 cp; deploy.sh supplies its own for CLI deploys.
-    Default: "s3://pairputer-launch/pairputer/microvm-image/pairputer-doom-context-72b69270056f65e9a800a2d5f6f5407a28fbba14bd10b63ae6cf9e7c22185c73.zip"
+    # Public Workbench build context (integrity-hashed — filename embeds its tree SHA-256), including its
+    # validated capsule.manifest.json for the in-stack manifest stager. Republish with
+    # publish-launch.sh / package-doom-image.sh + s3 cp; deploy.sh supplies its own for CLI deploys.
+    Default: "s3://pairputer-launch/pairputer/microvm-image/pairputer-computer-use-desktop-context-2bb4891b7512343e7fdfa3b75416683e12190e1ee3b3edbea071f9ec15c2aad8.zip"
     Description: >
-      S3 URI for the WAD-free DOOM MicroVM build context zip (used only when building a bundled image
-      in-stack). Defaults to the public agent-doom context. Required unless DoomImageArnOverride is set.
+      S3 URI for the bundled capsule's MicroVM build context zip (used only when building a bundled image
+      in-stack). Defaults to the public Pairputer Workbench context. Required unless DoomImageArnOverride is set.
     AllowedPattern: '^$|^s3://[^\s]+$'
   DoomCodeArtifactBucket:
     Type: String
@@ -86,7 +87,7 @@ Parameters:
     AllowedPattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
   DoomImageName:
     Type: String
-    Default: hellbox-doom
+    Default: pairputer-workbench
     Description: Account-local Lambda MicroVM image name created by the stack.
     AllowedPattern: '^[a-zA-Z0-9-_]{1,64}$'
   DoomBaseImageArn:
@@ -101,10 +102,10 @@ Parameters:
     AllowedPattern: '^[^\s]+$'
   DoomImageMinimumMemoryMiB:
     Type: Number
-    Default: 2048
+    Default: 8192
     MinValue: 2048
     MaxValue: 32768
-    Description: Minimum memory for each DOOM MicroVM.
+    Description: Minimum memory for each bundled-capsule MicroVM (the Workbench needs 8192).
   NetworkingMode:
     Type: String
     Default: CreateVpcFckNat
@@ -173,17 +174,17 @@ Parameters:
       itself never receives credentials. Empty = feature disabled.
   ReferenceCapsuleId:
     Type: String
-    Default: agent-doom
+    Default: computer-use-desktop
     Description: >-
       Registry id/key for the bundled reference capsule (the MCP's default capsule). deploy.sh derives it
-      from the packaged capsule.yaml. Was hardcoded "doom" (Hellbox); now follows the bundled capsule.
+      from the packaged capsule.yaml. Defaults to the Pairputer Workbench.
   ReferenceCapsuleName:
     Type: String
-    Default: Agent DOOM
+    Default: Pairputer Workbench
     Description: Display name for the bundled reference capsule. deploy.sh fills from capsule.yaml.
   ReferenceCapsuleDescription:
     Type: String
-    Default: DOOM with an in-VM agent bridge — human plays live; the agent observes and drives via tools.
+    Default: A persistent, streamed Linux workstation shared by a human and an agent — browser, editor, terminal, verified task execution.
     Description: Display description for the bundled reference capsule. deploy.sh fills from capsule.yaml.
   SuperAdminEmail:
     Type: String
@@ -233,7 +234,7 @@ Parameters:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
-    Description: When true, the DOOM image build fails if its input self-test does not pass, so a flaky build never ships with broken keyboard/mouse.
+    Description: When true, the bundled-capsule image build fails if its input self-test does not pass, so a flaky build never ships with broken keyboard/mouse.
 
 Rules:
   DoomOverrideRequiresExplicitAllow:
@@ -281,7 +282,7 @@ Conditions:
   ResolveVpcCidr: !And
     - !Equals [!Ref NetworkingMode, ExistingVpc]
     - !Equals [!Ref VpcCidr, ""]
-  # Bundle the DOOM reference capsule at all? When false, the substrate ships capsule-empty.
+  # Bundle the Workbench reference capsule at all? When false, the substrate ships capsule-empty.
   BundleCapsule: !Equals [!Ref BundleReferenceCapsule, "true"]
   # Build the capsule MicroVM image in-stack: bundling AND no prebuilt override supplied.
   BuildDoomImage: !And
@@ -322,7 +323,7 @@ Metadata:
           - NewVpcCidr
           - FckNatAmiId
       - Label:
-          default: Reference Capsule (DOOM / Hellbox)
+          default: Bundled Capsule (Pairputer Workbench)
         Parameters:
           - BundleReferenceCapsule
           - DoomImageArnOverride
@@ -350,7 +351,7 @@ Metadata:
           - WebAclArn
     ParameterLabels:
       BundleReferenceCapsule:
-        default: Bundle the DOOM reference capsule? (uncheck for a bare substrate)
+        default: Bundle the Pairputer Workbench capsule? (uncheck for a bare substrate)
       ImageSource:
         default: Image source (Public = 1-click; Private = bring your own)
       PrivateMcpContainerUri:
@@ -378,21 +379,21 @@ Metadata:
       RelayContainerUri:
         default: Stateful relay image URI
       DoomImageArnOverride:
-        default: Existing DOOM MicroVM image ARN override
+        default: Existing bundled-capsule MicroVM image ARN override
       AllowDoomImageArnOverride:
-        default: Allow existing DOOM image override
+        default: Allow existing bundled-capsule image override
       DoomCodeArtifactUri:
-        default: WAD-free DOOM MicroVM build context S3 URI
+        default: Bundled capsule build context S3 URI
       DoomCodeArtifactBucket:
-        default: DOOM MicroVM build context S3 bucket
+        default: Bundled capsule build context S3 bucket
       DoomImageName:
-        default: DOOM MicroVM image name
+        default: Bundled capsule MicroVM image name
       DoomBaseImageArn:
         default: Managed MicroVM base image ARN override
       DoomBaseImageVersion:
         default: Managed MicroVM base image version
       DoomImageMinimumMemoryMiB:
-        default: DOOM MicroVM minimum memory
+        default: Bundled capsule MicroVM minimum memory
       RuntimeName:
         default: AgentCore runtime name
       CodexCallbackUrl:
@@ -604,20 +605,29 @@ Resources:
       ServiceToken: !GetAtt DoomImageOverrideValidatorFunction.Arn
       ImageArn: !Ref DoomImageArnOverride
 
+  # The bundled capsule uses the SAME cartridge template as deploy-capsule.sh (capsule-stack.yaml),
+  # in StageManifestFromContext mode: the stack itself reads capsule.manifest.json from the context
+  # zip and stages the chunked SSM manifest + release, so the capsule registers via tag discovery
+  # exactly like a separately-deployed cartridge — no 4 KB env-var manifest, works for any capsule.
+  # (Param names retain the legacy Doom* prefix so existing stacks can still update in place.)
   DoomImageStack:
     Type: AWS::CloudFormation::Stack
     Condition: BuildDoomImage
     Properties:
-      TemplateURL: nested/microvm-image.yaml
+      TemplateURL: ../../capsules/nested/capsule-stack.yaml
       Parameters:
-        DoomCodeArtifactUri: !Ref DoomCodeArtifactUri
-        DoomCodeArtifactBucket: !Ref DoomCodeArtifactBucket
-        DoomImageName: !Ref DoomImageName
-        DoomBaseImageArn: !Ref DoomBaseImageArn
-        DoomBaseImageVersion: !Ref DoomBaseImageVersion
-        DoomImageMinimumMemoryMiB: !Ref DoomImageMinimumMemoryMiB
+        CapsuleContextUri: !Ref DoomCodeArtifactUri
+        CapsuleContextBucket: !Ref DoomCodeArtifactBucket
+        CapsuleImageName: !Ref DoomImageName
+        CapsuleBaseImageArn: !Ref DoomBaseImageArn
+        CapsuleBaseImageVersion: !Ref DoomBaseImageVersion
+        CapsuleMinMemoryMiB: !Ref DoomImageMinimumMemoryMiB
         PairputerDebug: !Ref PairputerDebug
         InputSelftestEnforce: !Ref InputSelftestEnforce
+        CapsuleId: !Ref ReferenceCapsuleId
+        CapsuleDisplayName: !Ref ReferenceCapsuleName
+        CapsuleDescription: !Ref ReferenceCapsuleDescription
+        StageManifestFromContext: "true"
 
   RelayNetworkStack:
     Type: AWS::CloudFormation::Stack
@@ -666,7 +676,7 @@ Resources:
           - !If
             - UseDoomImageOverride
             - !GetAtt DoomImageOverrideValidation.ImageArn
-            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+            - !GetAtt DoomImageStack.Outputs.CapsuleImageArn
           - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:pairputer-no-capsule"
         VpcId: !GetAtt RelayNetworkStack.Outputs.ResolvedVpcId
         PrivateSubnetIds: !GetAtt RelayNetworkStack.Outputs.ResolvedPrivateSubnetIds
@@ -709,7 +719,7 @@ Resources:
           - !If
             - UseDoomImageOverride
             - !GetAtt DoomImageOverrideValidation.ImageArn
-            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+            - !GetAtt DoomImageStack.Outputs.CapsuleImageArn
           - ""
         # Capsule registry (id -> {arn,name,description}) the MCP server serves. "{}" (empty) on a
         # capsule-empty substrate — the server runs and capsule tools report "no capsules". Add more
@@ -722,7 +732,7 @@ Resources:
           - !If
             - UseDoomImageOverride
             - !Sub ['{"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}}', {I: !Ref ReferenceCapsuleId, A: !GetAtt DoomImageOverrideValidation.ImageArn, N: !Ref ReferenceCapsuleName, D: !Ref ReferenceCapsuleDescription}]
-            - !Sub ['{"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}}', {I: !Ref ReferenceCapsuleId, A: !GetAtt DoomImageStack.Outputs.DoomImageArn, N: !Ref ReferenceCapsuleName, D: !Ref ReferenceCapsuleDescription}]
+            - !Sub ['{"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}}', {I: !Ref ReferenceCapsuleId, A: !GetAtt DoomImageStack.Outputs.CapsuleImageArn, N: !Ref ReferenceCapsuleName, D: !Ref ReferenceCapsuleDescription}]
           - "{}"
         # All capsule image ARNs for least-privilege MicroVM-control IAM. Placeholder when capsule-empty.
         CapsuleImageArns: !If
@@ -730,7 +740,7 @@ Resources:
           - !If
             - UseDoomImageOverride
             - !GetAtt DoomImageOverrideValidation.ImageArn
-            - !GetAtt DoomImageStack.Outputs.DoomImageArn
+            - !GetAtt DoomImageStack.Outputs.CapsuleImageArn
           - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:pairputer-no-capsule"
         RuntimeName: !Ref RuntimeName
         RelayUrl: !GetAtt RelayStack.Outputs.RelayUrl
@@ -760,21 +770,21 @@ Outputs:
     Value: !If
       - UseDoomImageOverride
       - !GetAtt DoomImageOverrideValidation.ImageArn
-      - !GetAtt DoomImageStack.Outputs.DoomImageArn
+      - !GetAtt DoomImageStack.Outputs.CapsuleImageArn
   DoomImageState:
     Condition: BundleCapsule
     Description: State of the stack-built DOOM image, or EXTERNAL when using an override.
     Value: !If
       - UseDoomImageOverride
       - !GetAtt DoomImageOverrideValidation.ImageState
-      - !GetAtt DoomImageStack.Outputs.DoomImageState
+      - !GetAtt DoomImageStack.Outputs.CapsuleImageState
   DoomLatestActiveImageVersion:
     Condition: BundleCapsule
     Description: Latest active stack-built DOOM image version, or EXTERNAL when using an override.
     Value: !If
       - UseDoomImageOverride
       - !GetAtt DoomImageOverrideValidation.LatestActiveImageVersion
-      - !GetAtt DoomImageStack.Outputs.DoomLatestActiveImageVersion
+      - !GetAtt DoomImageStack.Outputs.CapsuleLatestActiveVersion
   McpRuntimeId:
     Description: AgentCore Runtime ID.
     Value: !GetAtt AgentCoreStack.Outputs.McpRuntimeId
