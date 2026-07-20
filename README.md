@@ -49,6 +49,11 @@ After it finishes, you get an **admin invite email** with your temporary passwor
 
 *Want to verify the images first?* Run [`scripts/verify-images.sh`](./scripts/verify-images.sh) — an offline cosign signature + SLSA check.
 
+**💸 What does it create, and what does it cost?** See [**docs/1-click-cost.md**](./docs/1-click-cost.md)
+— a complete inventory of every AWS resource and IAM role the 1-click deploys (each linked to its
+CloudFormation source) plus honest daily/weekly/monthly cost estimates. TL;DR: ≈ **$55–60/month**
+always-on, ≈ **$0.60 per active hour** of Workbench use, ≈ $0 while Frozen.
+
 ### 🛠️ Path B — `deploy.sh` (from-source CLI, separate from the 1-click)
 
 Use this **instead of** the 1-click when you want to **build the images from source**, use **private ECR**, or have Codex wired up **automatically**:
