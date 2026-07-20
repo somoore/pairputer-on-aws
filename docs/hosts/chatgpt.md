@@ -78,7 +78,13 @@ substrate/wire-chatgpt.sh --register-callback 'https://chatgpt.com/connector/oau
 ```
 
 This adds the URL to the Cognito ChatGPT client (idempotent; preserves previously registered
-connector callbacks). Skipping this step = the OAuth popup bounces with `redirect_mismatch`.
+connector callbacks and re-asserts the scope set). Skipping this step = the OAuth popup bounces with
+`redirect_mismatch`. Observed 2026-07-20: a deleted-and-recreated connector can come back with the
+SAME callback id, so re-running this command is often a no-op - run it anyway, it's harmless.
+
+> Redeployed or replaced the whole stack? The connector also pins the old stack's OAuth client and
+> endpoint - see the [reconnect checklist](./README.md#redeployed-the-stack-reconnect-checklist-verified-live-2026-07-20)
+> before debugging anything else.
 
 ### 5. Connect (OAuth)
 
