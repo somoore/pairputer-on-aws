@@ -35,14 +35,14 @@ Parameters:
   # (keyless cosign, signed as Pairputer/pairputer-internal). Verify with scripts/verify-images.sh.
   ContainerUri:
     Type: String
-    Default: "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:665fcdbcdc245f18c68be220cf216440ab1772eb2a8aee3be5036238a44f5193"
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:47b78b4aa26b8e9adbbd5e2f2d8fe53508439669fbc1dfccfde07e335d66a7e9"
     Description: >
       Public-mode MCP image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
       Verify out of band with scripts/verify-images.sh. (Private mode uses PrivateMcpContainerUri instead.)
     AllowedPattern: '^public\.ecr\.aws/[a-z0-9][a-z0-9._-]*/[^@]+@sha256:[0-9a-f]{64}$'
   RelayContainerUri:
     Type: String
-    Default: "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:7340635637cb1aa4644a90da4644986d708260752fa363522321f33710b69176"
+    Default: "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:812eea71958a09fd925e0073f684e6f554001f4694ce200ce539819df909b6cf"
     Description: >
       Public-mode relay image. Defaults to the signed, published pairputer public-ECR image, pinned by digest.
       (Private mode uses PrivateRelayContainerUri instead.)
