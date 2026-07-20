@@ -1,5 +1,9 @@
 <div align="center">
-  <img alt="pairputer" src="./brand/pairputer-logo-light.png" width="440">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./brand/pairputer-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="./brand/pairputer-logo-light.png">
+    <img alt="pairputer" src="./brand/pairputer-logo-light.png" width="440">
+  </picture>
 </div>
 
 **Stream a live Linux MicroVM into your AI chat — video, audio, keyboard, mouse — running entirely in your own AWS account.**
