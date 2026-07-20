@@ -151,7 +151,9 @@ PRIVATE_SUBNET_IDS="${PAIRPUTER_PRIVATE_SUBNET_IDS:-}"
 VPC_CIDR="${PAIRPUTER_VPC_CIDR:-}"
 FCK_NAT_AMI_ID="${PAIRPUTER_FCK_NAT_AMI_ID:-}"
 NEW_VPC_CIDR="${PAIRPUTER_NEW_VPC_CIDR:-10.71.0.0/16}"
-COGNITO_DOMAIN_PREFIX="${PAIRPUTER_COGNITO_DOMAIN_PREFIX:-pairputer-prod-auth}"
+# Blank = the template derives a globally-unique prefix from the account id (Cognito domains
+# are GLOBAL across all AWS accounts — a fixed default collides for every second deployer).
+COGNITO_DOMAIN_PREFIX="${PAIRPUTER_COGNITO_DOMAIN_PREFIX:-}"
 RUNTIME_NAME="${PAIRPUTER_RUNTIME_NAME:-pairputer_mcp_stateful}"
 CODEX_CALLBACK_URL="${PAIRPUTER_CODEX_CALLBACK_URL:-}"
 SUPER_ADMIN_EMAIL="${PAIRPUTER_SUPER_ADMIN_EMAIL:-${PAIRPUTER_ADMIN_EMAIL:-}}"
@@ -428,7 +430,7 @@ elif [[ "${ENABLE_CLOUDFRONT_WAF}" == "true" ]]; then
 else
   echo "==> CloudFront WAF:   disabled by PAIRPUTER_ENABLE_CLOUDFRONT_WAF=false"
 fi
-echo "==> CognitoDomain:    ${COGNITO_DOMAIN_PREFIX}"
+echo "==> CognitoDomain:    ${COGNITO_DOMAIN_PREFIX:-(derived: pairputer-${AWS_ACCOUNT_ID})}"
 echo "==> CodexCallback:    ${CODEX_CALLBACK_URL}"
 echo "==> SuperAdmin:       ${SUPER_ADMIN_EMAIL:-<not configured>}"
 echo "==> RelayWarmSec:     ${RELAY_WARM_SECONDS}"
