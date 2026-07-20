@@ -1,9 +1,85 @@
 # Host: Claude (web + desktop)
 
+Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-09; re-verified on a fresh
+1-click stack 2026-07-17 and 2026-07-20)** - OAuth, tools (incl. tag-discovered capsule cartridge
+tools), widget render, direct-connect video + audio, keyboard/mouse, freeze/thaw/launch via widget
+buttons, fullscreen. No PiP (Claude does not offer it).
+
 The first MCP-Apps-standard host (SEP-1865) - no `window.openai`, no iframe player. Adding it
 exposed every hidden OpenAI-specific dependency in the widget; the full war story is `blog5.md`.
-All facts below are empirically proven (live, human-confirmed 2026-07-09: video + audio + keyboard
-+ mouse + freeze/thaw).
+
+---
+
+## End-to-end setup: zero → driving the Pairputer Workbench in Claude web
+
+Prerequisites: a deployed pairputer stack, a claude.ai account (web), and a pairputer Cognito user
+(the super-admin from the deploy works). Unlike ChatGPT there is **no callback-registration step
+and no base-scope step** - Claude's redirect URLs are fixed and baked in at deploy time, and Claude
+requests the full scope set from discovery on its own.
+
+### 1. Collect your stack values + verify the auth chain
+
+```bash
+substrate/wire-claude.sh
+```
+
+This prints the two values you'll paste into Claude - `McpEndpoint` and `ClaudeClientId` - and
+verifies the discovery chain Claude depends on (401 `WWW-Authenticate resource_metadata` →
+protected-resource metadata → Cognito OIDC discovery). No registration step follows; callbacks are
+pre-baked. (No CLI? Both values are on your CloudFormation stack's **Outputs** tab.)
+
+### 2. Add the custom connector
+
+claude.ai → **Settings → Customize → Connectors** → **Add** (top-right) → **Add custom connector**.
+(The old *Settings → Connectors* path now redirects here - "Connectors have moved to Customize".)
+
+| Field | Value |
+|---|---|
+| Name | `pairputer` |
+| Remote MCP server URL | the `McpEndpoint` stack output (the full `https://bedrock-agentcore..../invocations?qualifier=DEFAULT` URL) |
+| Advanced settings → OAuth Client ID | the `ClaudeClientId` stack output |
+| OAuth Client Secret | leave BLANK - it's a public PKCE client |
+
+Click **Add**.
+
+> Verified 2026-07-17 via a fresh 1-click deploy: the modal wants exactly Name + URL + Client ID (no
+> secret); Connect launches the Cognito login at
+> `pairputer-<accountid>.auth.<region>.amazoncognito.com` with `redirect_uri=…/api/mcp/auth_callback`
+> already accepted.
+
+### 3. Connect (OAuth)
+
+The connector appears with a **Connect** button → **Connect** → sign in on the Cognito hosted UI
+with your super-admin email + the temp password from the invite email (first login forces a
+permanent password) → it auto-redirects back. Done.
+
+Reconnect UX (shown by the widget on auth expiry): Settings → Customize → Connectors → pairputer →
+**Reconnect**. (After a stack redeploy, Reconnect is NOT enough - see the troubleshooting table.)
+
+### 4. Play
+
+Open a **new** chat → type:
+
+> Use the pairputer app to open the Pairputer Workbench (play_capsule) so we can share a live desktop.
+
+The widget reveals inline and streams directly (canvas, no iframe). Click to focus, drive with
+keyboard/mouse; ❄ Freeze suspends the VM (billing paused), 🔥 Thaw resumes the exact same session.
+
+**Desktop + mobile:** nothing extra - once connected on web, the connector is available in the
+Claude desktop and mobile apps automatically.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Cognito error page shows `invalid_request` with a client_id that isn't in your pool | The connector pins the OAuth client of a DELETED/replaced stack; "Reconnect" cannot fix it | Fully remove the connector and re-add it with the new stack's `McpEndpoint` (see the [reconnect checklist](./README.md#redeployed-the-stack-reconnect-checklist-verified-live-2026-07-20)) |
+| OAuth popup bounces with `invalid_scope` | Claude requests **every** scope Cognito's discovery advertises; a client that disallows any of them bounces | The `ClaudeClient` in `identity.yaml` allows the full standard OIDC set + `pairputer-mcp/invoke`. If you narrowed it, restore the full set |
+| Widget renders stale UI after a widget/server redeploy | Claude caches the widget per conversation render | Start a **NEW** chat; old conversations may keep the stale widget (expected) |
+| Widget stuck invisible on open | The reveal handshake failed (a `tools/call` raced `ui/notifications/initialized`, or `appInfo` was mis-keyed) | This is a widget-code bug class, not a user setup issue - see Capabilities below and the E2E checklist |
+
+---
 
 ## Capabilities / constraints (all empirically proven)
 
@@ -43,32 +119,7 @@ All facts below are empirically proven (live, human-confirmed 2026-07-09: video 
   `invalid_scope` (same wall as ChatGPT).
 - **Auth discovery:** the same RFC 9728 chain as the other hosts (PROBE-4) - AgentCore's 401
   `resource_metadata` → Cognito OIDC discovery. No front door, no DCR; Claude connects to the same
-  bedrock-agentcore endpoint Codex uses.
-
-## Setup
-
-1. `substrate/wire-claude.sh` - verifies the discovery chain and prints the values below (no
-   registration step; callbacks are baked in at deploy time).
-2. In claude.ai: **Settings → Customize → Connectors** → **Add** (top-right) → **Add custom
-   connector**. (The old *Settings → Connectors* path now redirects here - "Connectors have moved to
-   Customize".) Fill:
-   - **Name** = `pairputer`
-   - **Remote MCP server URL** = the `McpEndpoint` stack output (the full
-     `https://bedrock-agentcore.../invocations?qualifier=DEFAULT` URL)
-   - **Advanced settings → OAuth Client ID** = the `ClaudeClientId` stack output. Leave **OAuth
-     Client Secret** BLANK - it's a public PKCE client.
-3. **Add** → the connector appears with a **Connect** button → **Connect** → sign in on the Cognito
-   hosted UI with your super-admin email + the temp password from the invite email (first login
-   forces a permanent password) → it auto-redirects back (callback is pre-registered) → open a
-   **new** chat → "open pairputer" / `play_capsule`.
-
-Reconnect UX (shown by the widget on auth expiry): Settings → Customize → Connectors → pairputer →
-Reconnect.
-
-> Verified 2026-07-17 via a fresh 1-click deploy: the Add-custom-connector modal wants exactly Name +
-> URL + Client ID (no secret); Connect launches the Cognito login at
-> `pairputer-<accountid>.auth.<region>.amazoncognito.com` with `redirect_uri=…/api/mcp/auth_callback`
-> already accepted.
+  bedrock-agentcore endpoint the other hosts use.
 
 ## E2E checklist (regression gate for any MCP-layer or widget-bridge change)
 
