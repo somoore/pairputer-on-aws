@@ -32,12 +32,12 @@ container images come from:
   **API-backed custom resource** (`Custom::PairputerAgentCoreRuntime`) — the AgentCore *API* accepts public
   ECR. The custom-resource Lambda is least-privilege: `bedrock-agentcore:{Create,Update,Delete,Get,List}AgentRuntime`
   plus `iam:PassRole` scoped to the one controller role (`iam:PassedToService: bedrock-agentcore`), and logs.
-- **Private** — you bring your own images in your account's **private ECR** (`PrivateMcpContainerUri` +
-  `PrivateRelayContainerUri`, required in this mode; a CloudFormation `Rule` fails the deploy if either is
-  missing). Private mode uses the **native** `AWS::BedrockAgentCore::Runtime` resource (it accepts private
-  ECR). Your images are your own supply-chain responsibility; pairputer's signing story covers only the
-  public images. (Planned follow-up: Private mode with blank URIs auto-copies the public images into your
-  private ECR via CodeBuild.)
+- **Private** — your account's **private ECR**. Set `PrivateMcpContainerUri` / `PrivateRelayContainerUri`
+  to bring your own images (then they are your own supply-chain responsibility), or **leave either blank**
+  and an in-stack CodeBuild (`ImageCopyStack`) **cosign-verifies pairputer's signed public digest first —
+  offline, against the pinned Sigstore root — and only then crane-copies it** into a private ECR repo in
+  your account. Private mode uses the **native** `AWS::BedrockAgentCore::Runtime` resource (it accepts
+  private ECR).
 
 ## The artifacts a deployer trusts, and how each is verified
 
@@ -46,15 +46,17 @@ container images come from:
 | CloudFormation templates | pairputer launch S3 bucket | CloudFormation-only bucket policy (`aws:CalledVia`); templates carry **no secrets** — every secret is generated in the deployer's account at create time |
 | **MCP server image** (`public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:…`) | GitHub Actions CI | **digest-pinned** (immutable = deploy-time integrity) + **cosign keyless signature + SLSA provenance attestation**, independently verifiable out of band with `scripts/verify-images.sh` (offline, pinned Sigstore root) |
 | **Relay image** (`public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:…`) | GitHub Actions CI | same as MCP image |
-| Base images of the two published images (`python:3.12-slim`, `node:20-slim`) | Docker Hub | **digest-pinned** (`@sha256:` arm64) so a rebuild can't silently pull a different base |
+| Base images of the two published images (`python:3.12-slim-bookworm`, `node:20-bookworm-slim`) | Docker Hub | **digest-pinned** (`@sha256:` arm64) so a rebuild can't silently pull a different base |
 | Capsule MicroVM base | AWS-managed | governed by the template's `BaseImageArn` (versioned `aws:microvm-image:al2023-1`) — the AWS-controlled pin for the in-account build; the capsule Dockerfile `FROM` is local-build-only and intentionally not pinned to a public base to avoid conflicting with `BaseImageArn` |
-| DOOM MicroVM capsule build context (the zip) † | pairputer launch bucket (for 1-click) | **tree SHA-256** (computed at package time) recorded + checked; the context is WAD-free |
-| `DOOM1.WAD` (fetched during the in-account image build) † | third-party mirror | **SHA-256 pinned + verified during build** (see CLAUDE.md wall #5) — already in place |
+| Bundled capsule (Pairputer Workbench) build context zip † | pairputer launch bucket (for 1-click) | **tree SHA-256 embedded in the filename** (content-addressed); the in-stack manifest stager reads the validated `capsule.manifest.json` from that exact zip and stages an **immutable, digest-chained SSM release** (manifest digest → release record → atomic `/current` pointer) |
+| Third-party binaries the Workbench image build fetches (gh, ripgrep, uv, code-server, FFmpeg, Chromium, Homebrew) † | GitHub releases / public mirror | **version + SHA-256 pinned in the Dockerfile**, verified during the in-account build |
 | Relay HMAC secret, CloudFront keys, origin secret | generated in the deployer's account | never distributed; live only in the deployer's Secrets Manager |
 
 † Reference-capsule artifacts. Present only when the **Bundle reference capsule** parameter is on (the
-default). With it off, the substrate deploys capsule-empty and neither the DOOM build context nor the WAD
-is fetched — removing those two third-party trust dependencies entirely.
+default). With it off, the substrate deploys capsule-empty and neither the build context nor its
+third-party binaries are fetched. (The optional **Agent DOOM cartridge** — `deploy-capsule.sh agent-doom` —
+follows the same rules: tree-hashed context, and its `DOOM1.WAD` is SHA-256-pinned + verified during the
+in-account build.)
 
 ## Signing (CI)
 
@@ -78,7 +80,7 @@ chain, zero stored secrets:
      public.ecr.aws/<alias>/<repo>@${DIGEST}
    ```
 
-ECR Public signing/verify is **us-east-1 only**.
+ECR Public **publishing** (push + sign) is **us-east-1 only**; verification runs from anywhere.
 
 ## Verification (out of band — the digest pin is the deploy-time guarantee)
 
@@ -179,7 +181,8 @@ and the two are independent, so compromising one grant doesn't hand over the oth
 - **No AgentCore/ECS native admission control** for signatures — the deploy-time guarantee is the immutable
   digest pin; signature/provenance are verified out of band (`scripts/verify-images.sh`), not enforced by an
   in-stack admission gate (see above for why, and the opt-in path if you want one).
-- **The DOOM MicroVM image itself cannot be pre-signed by us** — `AWS::Lambda::MicrovmImage` builds
-  **in-account** from the S3 context (no ECR/prebuilt import). Its integrity rests on the tree-hash of the
-  build context + the SHA-256-pinned WAD fetched during the build, both in the deployer's own account.
+- **The capsule MicroVM image itself cannot be pre-signed by us** — `AWS::Lambda::MicrovmImage` builds
+  **in-account** from the S3 context (no ECR/prebuilt import). Its integrity rests on the content-addressed
+  tree-hash of the build context + the SHA-256-pinned third-party artifacts fetched during the build, both
+  in the deployer's own account.
 - Long-lived AWS credentials are never stored in GitHub (OIDC only) and never distributed to deployers.
