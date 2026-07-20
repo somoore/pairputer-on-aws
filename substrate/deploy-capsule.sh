@@ -237,7 +237,9 @@ while :; do
   if [[ "${CAP_FLAKE}" == "true" && ${cap_attempt} -lt ${CAPSULE_DEPLOY_MAX_ATTEMPTS} ]]; then
     cap_attempt=$((cap_attempt + 1))
     echo "==> Capsule image hit the flaky 'did not stabilize'; retrying (attempt ${cap_attempt}/${CAPSULE_DEPLOY_MAX_ATTEMPTS})..." >&2
-    aws cloudformation wait stack-rollback-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+    # NOT `wait stack-rollback-complete`: that waiter never matches a CREATE rollback's
+    # ROLLBACK_COMPLETE and blind-polls for 60 minutes (see hb_wait_stack_settled in lib/aws-env.sh).
+    hb_wait_stack_settled "${STACK_NAME}"
     # A failed FIRST create leaves ROLLBACK_COMPLETE, which can't be updated — delete before retrying.
     CAP_STATE="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
       --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"

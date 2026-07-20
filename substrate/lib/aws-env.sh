@@ -55,3 +55,27 @@ hb_require_aws() {
   fi
   export AWS_ACCOUNT_ID="${ident}"
 }
+
+# hb_wait_stack_settled <stack-name>: block until the stack reaches ANY settled (non-*_IN_PROGRESS)
+# state, or no longer exists. Bounded at ~10 minutes; polls every 15s.
+#
+# WHY THIS EXISTS instead of `aws cloudformation wait stack-rollback-complete`: that waiter's ONLY
+# success acceptor is UPDATE_ROLLBACK_COMPLETE — the terminal state of an *update* rollback. A failed
+# CREATE terminates at ROLLBACK_COMPLETE, which matches NO acceptor (not success, not failure), so the
+# waiter blind-polls its full 120 x 30s = 60 MINUTES before giving up. Behind an `|| true` that reads
+# as "rollback settled" while actually stalling every create-flake retry by an hour — and any command
+# sequenced after it (e.g. a delete) fires an hour late at whatever stack then holds the name.
+# Verified against botocore's cloudformation waiters-2.json (StackRollbackComplete acceptors).
+hb_wait_stack_settled() {
+  local stack="$1" status="" i
+  for i in $(seq 1 40); do
+    status="$(aws cloudformation describe-stacks --stack-name "${stack}" --region "${AWS_REGION}" \
+      --query 'Stacks[0].StackStatus' --output text 2>/dev/null)" || return 0  # gone = settled
+    case "${status}" in
+      *_IN_PROGRESS) sleep 15 ;;
+      *) return 0 ;;                                        # any terminal state = settled
+    esac
+  done
+  echo "WARNING: stack ${stack} still in ${status} after ~10 minutes; proceeding anyway." >&2
+  return 0
+}

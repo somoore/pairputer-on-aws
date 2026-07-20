@@ -605,9 +605,10 @@ stack ended in ${CURRENT_STATE} after re-waiting"
     attempt=$((attempt + 1))
     echo "==> Deploy hit the flaky MicroVM image resource; retrying (attempt ${attempt}/${DEPLOY_MAX_ATTEMPTS})..." >&2
     echo "    (the AWS::Lambda::MicrovmImage resource is slow/flaky; a second pass usually stabilizes it)" >&2
-    # Let any in-flight rollback settle first.
-    aws cloudformation wait stack-rollback-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
-    aws cloudformation wait stack-update-complete   --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+    # Let any in-flight rollback/update settle first. NOT `wait stack-rollback-complete`: that
+    # waiter never matches a CREATE rollback's ROLLBACK_COMPLETE and blind-polls for 60 minutes
+    # (see hb_wait_stack_settled in lib/aws-env.sh).
+    hb_wait_stack_settled "${STACK_NAME}"
     # A FAILED FIRST CREATE leaves the stack ROLLBACK_COMPLETE, which cannot be updated — only
     # deleted. So `aws cloudformation deploy` on the next pass would fail with "cannot be updated".
     # Delete it before retrying so the retry is a clean re-create. (An UPDATE failure lands in
