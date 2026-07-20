@@ -164,12 +164,14 @@ if ! aws s3 ls "s3://${LAUNCH_BUCKET}/${FFMPEG_KEY}" >/dev/null 2>&1; then
   fi
 fi
 
-# 2c. Publish the brand logo the Cognito invite email embeds (third-party/* is public-read).
-if [[ -f "${SCRIPT_DIR}/../brand/pairputer-logo-dark.png" ]]; then
-  aws s3 cp "${SCRIPT_DIR}/../brand/pairputer-logo-dark.png" \
-    "s3://${LAUNCH_BUCKET}/third-party/brand/pairputer-logo-dark.png" \
-    --content-type image/png --cache-control "public, max-age=86400" --only-show-errors
-fi
+# 2c. Publish the brand logos the Cognito invite email embeds (third-party/* is public-read).
+for _logo in pairputer-logo-light.png pairputer-logo-dark.png; do
+  if [[ -f "${SCRIPT_DIR}/../brand/${_logo}" ]]; then
+    aws s3 cp "${SCRIPT_DIR}/../brand/${_logo}" \
+      "s3://${LAUNCH_BUCKET}/third-party/brand/${_logo}" \
+      --content-type image/png --cache-control "public, max-age=86400" --only-show-errors
+  fi
+done
 
 # 3. Package: rewrite nested TemplateURLs to absolute URLs in THIS bucket, then upload.
 echo "==> Packaging templates (nested TemplateURLs -> absolute S3 URLs in the launch bucket)..."
