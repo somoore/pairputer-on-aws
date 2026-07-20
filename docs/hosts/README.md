@@ -20,6 +20,25 @@ empirically. Per-host guides: [`codex.md`](./codex.md) · [`chatgpt.md`](./chatg
 | OAuth client | public PKCE + localhost hash callback | public PKCE + fixed https callback | public PKCE + fixed https callback |
 | DCR needed | no (static client_id in config.toml) | no (static/predefined client supported) | no (expected; verify) |
 
+## Redeployed the stack? Reconnect checklist (verified live 2026-07-20)
+
+A fresh stack means a **new Cognito user pool, new client ids, and a new `McpEndpoint` URL**. Every
+chat host's connector still pins the OLD registration, and the failure modes are confusingly different:
+
+- `invalid_request` on the Cognito hosted UI, with an old `client_id` in the URL: the connector is
+  presenting the deleted stack's OAuth client. **"Reconnect" does NOT fix this** - it only refreshes
+  tokens for the same (dead) registration. **Fully remove the connector and re-add it** with the new
+  stack's `McpEndpoint` output.
+- `redirect_mismatch` with the NEW client id: you re-added the ChatGPT connector, but its
+  **per-connector callback URL** (`https://chatgpt.com/connector/oauth/<id>`, shown in the connector's
+  settings) isn't registered on the fresh pool. Register it:
+  `substrate/wire-chatgpt.sh --register-callback '<that url>'`. A recreated connector gets a NEW id,
+  so this step repeats even if it was registered before.
+- Claude needs no callback step (its redirect URLs are static and pre-baked in `identity.yaml`);
+  a full remove + re-add with the new `McpEndpoint` is sufficient.
+- Only **ChatGPT (web)** and **Claude (web)** connectors need setup: each covers that product's web,
+  desktop, and mobile apps, and **Codex rides the ChatGPT connector**.
+
 ## Probe log
 
 ### PROBE-4 - AgentCore RFC 9728 protected-resource metadata: ✅ YES (2026-07-08)

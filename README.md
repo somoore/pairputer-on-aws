@@ -10,11 +10,11 @@
 
 pairputer is a deployable *substrate*: it runs an interactive **capsule** (a Lambda MicroVM workload) and streams it inline into an AI chat client. You get a live viewport, the model gets a controlled tool surface, and you're both driving the same machine. It suspends on idle (**Freeze**) and resumes on demand (**Thaw**), so you only pay while you're actually using it.
 
-**One server, one widget, three hosts, all live and human-confirmed:** **OpenAI Codex**, **ChatGPT** (web + desktop), and **Claude** (web + desktop). Once connected, open the reference capsule with a single prompt:
+**One server, one widget, every major host, all live and human-confirmed.** Connect two connectors, **ChatGPT (web)** and **Claude (web)**, and pairputer works across web, desktop, and mobile for each, including **Codex** (it rides the ChatGPT connector). Once connected, open the reference capsule with a single prompt:
 
 > Use the pairputer app to open the Pairputer Workbench (play_capsule) so we can share a live desktop.
 
-Per-host connector setup: [`docs/hosts/codex.md`](./docs/hosts/codex.md) · [`docs/hosts/chatgpt.md`](./docs/hosts/chatgpt.md) · [`docs/hosts/claude.md`](./docs/hosts/claude.md).
+Connector setup: [`docs/hosts/chatgpt.md`](./docs/hosts/chatgpt.md) · [`docs/hosts/claude.md`](./docs/hosts/claude.md).
 
 The bundled reference capsule is the **Pairputer Workbench**: a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. Your git identity, editor settings, and projects survive Freeze, Thaw, and even Trash, thanks to the durable per-tenant workspace.
 
@@ -45,7 +45,7 @@ Bedrock AgentCore + Lambda MicroVM availability varies by region.
 
 Click the button, enter **one input: your email address** (it becomes the super-admin account and receives the invite), and deploy. Everything else defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account.
 
-After it finishes, you get an **admin invite email** with your temporary password and the exact steps to connect Codex, including a one-line setup command. Then `codex mcp login pairputer` and play.
+After it finishes, you get an **admin invite email** with your temporary password. Then add the pairputer connector in ChatGPT (web) and Claude (web) using your stack's `McpEndpoint` output (see [`docs/hosts/`](./docs/hosts/)) and play.
 
 *Want to verify the images first?* Run [`scripts/verify-images.sh`](./scripts/verify-images.sh), an offline cosign signature + SLSA check.
 
@@ -56,14 +56,14 @@ always-on, about **$0.60 per active hour** of Workbench use, and near $0 while F
 
 ### 🛠️ Path B - `deploy.sh` (from-source CLI, separate from the 1-click)
 
-Use this **instead of** the 1-click when you want to **build the images from source**, use **private ECR**, or have Codex wired up **automatically**:
+Use this **instead of** the 1-click when you want to **build the images from source** or use **private ECR**:
 
 ```bash
 git clone https://github.com/somoore/pairputer && cd pairputer
 substrate/deploy.sh
 ```
 
-`deploy.sh` builds and pushes the MCP and relay images, packages the capsule, deploys the whole nested stack, creates your super-admin, **and wires `~/.codex/config.toml` for you** (writes the server block and registers the OAuth callback). One command, ready to log in. See [`substrate/README.md`](./substrate/README.md) for options.
+`deploy.sh` builds and pushes the MCP and relay images, packages the capsule, deploys the whole nested stack, and creates your super-admin. One command, ready to log in. See [`substrate/README.md`](./substrate/README.md) for options.
 
 ## Options worth knowing
 
