@@ -45,7 +45,7 @@ flowchart TB
         end
 
         subgraph capsule["Capsule — Lambda MicroVM (optional)"]
-            vm["<b>DOOM (Hellbox)</b> reference capsule<br/>Xvnc + Chocolate Doom<br/>video :6903 · audio :6902 · input :6904"]
+            vm["<b>Pairputer Workbench</b> reference capsule<br/>Xvnc + shared Linux desktop<br/>video :6903 · audio :6902 · input :6904"]
         end
     end
 
@@ -73,7 +73,7 @@ change what gets built:
 | Parameter | Default | Effect |
 |---|---|---|
 | **Image source** | `Public` | `Public` = pairputer's signed public-ECR images + an API-backed AgentCore custom resource (the native CFN resource rejects public ECR). `Private` = your private-ECR images (or auto-copy ours in, verified first) + the native AgentCore resource. |
-| **Bundle reference capsule** | `true` | `true` = build + register the DOOM capsule (playable out of the box). `false` = **bare substrate** — no capsule build, empty registry; capsule tools report "no capsules deployed." |
+| **Bundle reference capsule** | `true` | `true` = build + register the Pairputer Workbench capsule (useful out of the box). `false` = **bare substrate** — no capsule build, empty registry; capsule tools report "no capsules deployed." |
 | **Networking mode** | `CreateVpcFckNat` | `CreateVpcFckNat` = dedicated VPC + a ~$3/mo fck-nat instance for egress. `CreateVpcNatGateway` = dedicated VPC + a managed NAT gateway. `ExistingVpc` = **bring your own** VPC + private subnets (they must have NAT egress). All three are proven end-to-end. |
 
 Nested stacks: `identity` (Cognito), `security` (secrets), `sessions` (DynamoDB), `relay-network`
@@ -182,21 +182,19 @@ sequenceDiagram
 
 ## Inside the capsule
 
-`start.sh` supervises: Xvnc (`:1`) → capsule services → Chocolate Doom (native ARM64 SDL2). Three data
-ports: **video** `:6903` (ffmpeg → H.264), **audio** `:6902` (PulseAudio → Opus), **input** `:6904`
-(JSON → XTEST). Input retries the X connection under a restart loop (fixes an Xvnc startup race).
+The capsule supervises: Xvnc (`:1`) → capsule services → the shared desktop (browser, VS Code,
+terminal, file manager). Three data ports: **video** `:6903` (ffmpeg → H.264), **audio** `:6902`
+(PulseAudio → Opus), **input** `:6904` (JSON → XTEST). Input retries the X connection under a restart
+loop (fixes an Xvnc startup race).
 
-The agent-doom cartridge adds an **agent brain** alongside the game: `agent_bridge.py` (`:6905`, HTTP →
-gRPC into the engine) exposes observe/act/`drive_goal`, and `autopilot.py` is the idle-takeover
-supervisor — human idle ~20s → the brain plays (hunt, fight, open doors, avoid nukage, respawn on death,
-advance the level-exit intermission); any human input → instant handback. Explicit `drive_goal` calls are
-fire-and-forget (`{status: driving}` in seconds — Codex caps remote MCP tool calls at ~25s) and preempt
-the autopilot's lock. See [`capsule-architecture.md`](./capsule-architecture.md) for the full demo-loop
-design and its testing rules.
+An agent-interactive capsule also ships an **agent bridge** (`:6905`, HTTP/JSON per its
+`capsule.yaml`) exposing its typed tools — the Workbench's confined workspace, verified task
+execution, browser/UI semantics, and human-first control epochs. See
+[`capsule-architecture.md`](./capsule-architecture.md) for how a capsule plugs into the substrate.
 
 `AWS::Lambda::MicrovmImage` can only be **built in-account** from an S3 context (no ECR/prebuilt import;
 `BaseImageArn` is AWS-managed), so every deployer builds the image. A build-time **readiness gate** keeps
-the image `503` until DOOM renders *and* an input self-test passes — with `InputSelftestEnforce=true`
+the image `503` until the desktop renders *and* an input self-test passes — with `InputSelftestEnforce=true`
 (default) a build with dead input **fails** rather than snapshotting a broken capsule.
 
 ---

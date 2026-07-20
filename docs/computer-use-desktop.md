@@ -1,7 +1,8 @@
 # Pairputer Workbench implementation index
 
-This document tracks the `computer-use-desktop` capsule implementation. It is additive to Agent DOOM;
-the generalized substrate remains capsule-agnostic and Agent DOOM remains the bundled reference.
+This document tracks the `computer-use-desktop` capsule implementation — the **Pairputer Workbench**,
+the substrate's bundled reference capsule. The generalized substrate remains capsule-agnostic; other
+capsules deploy as cartridges alongside it.
 
 ## Baseline and decisions
 
@@ -55,7 +56,7 @@ enough to render, but the live WebSocket features degrade; not yet chased.
 | Runtime and streaming | Desktop image, X11/Xvnc, audio/video/input, readiness, browser and human apps | ARM64 Docker build; non-black frame; input and semantic self-tests |
 | Semantic service | Private proto/gRPC, bridge, workspace/process/app/window/browser/AT-SPI services | Bounded structured evidence; loopback-only ports; bridge tests |
 | Brain and safety | Contracts, state machine, SQLite journal, ledgers, skills, policy, approvals, recovery | No success without evidence; epoch and approval race suites |
-| Substrate and viewport | Manifest schemas, per-capsule bridges/resources, hard binding, display/cursor/events | Two-capsule tests; Agent DOOM regression; rendered widget QA |
+| Substrate and viewport | Manifest schemas, per-capsule bridges/resources, hard binding, display/cursor/events | Two-capsule tests; second-capsule regression; rendered widget QA |
 | Evaluation and release | Fixtures, deterministic workflows, packaging, Docker/AWS lifecycle, security review | Release gates and reproducibility bundle |
 
 ## Validation ladder
@@ -126,10 +127,9 @@ security invariant to make the deployed path pass.
   `82b76230c8fd5dd3dabb6dc2d7f24db6c7076151c5d45846367da6334ceb17cd`.
 - Local release suite: 733 tests passed; all 17 cached-and-continuously-revalidated readiness checks
   passed; all seven strict deterministic bridge workflows passed with the independent workspace oracle.
-- AWS: `pairputer`, `pairputer-capsule-agent-doom`, and
-  `pairputer-capsule-computer-use-desktop` are complete; Workbench image version `2.0` is active at an
+- AWS: the `pairputer` substrate stack and both capsule cartridge stacks are complete; Workbench image version `2.0` is active at an
   8 GiB minimum. No failed version-suffixed image or stack remains.
-- Authenticated AgentCore smoke: 59 tools, both `agent-doom` and `computer-use-desktop`, all 26
+- Authenticated AgentCore smoke: 59 tools across both deployed capsules, all 26
   Workbench namespaced tools, and the generic `capsule_invoke` hot-add route.
 - Deployed behavior: launch and fused observation succeeded at 1440×900; a confined file was written,
   described with SHA-256 evidence, and reversibly trashed; suspend, thaw, post-thaw observation, and

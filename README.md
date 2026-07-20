@@ -16,14 +16,14 @@ pairputer is a deployable *substrate*: it runs an interactive **capsule** (a Lam
 
 Per-host connector setup: [`docs/hosts/codex.md`](./docs/hosts/codex.md) · [`docs/hosts/chatgpt.md`](./docs/hosts/chatgpt.md) · [`docs/hosts/claude.md`](./docs/hosts/claude.md).
 
-The bundled reference capsule is the **Pairputer Workbench** — a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. **Agent DOOM** — real DOOM with an in-VM agent bridge — remains available as an optional cartridge: `substrate/deploy-capsule.sh agent-doom`.
+The bundled reference capsule is the **Pairputer Workbench** — a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. Your git identity, editor settings, and projects survive Freeze, Thaw, and even Trash via the durable per-tenant workspace.
 
 ## Why pairputer
 
 - **Runs in *your* AWS account.** No third-party SaaS holds your session; no static credentials leave your machine.
 - **True 1-click.** Signed, digest-pinned public images + a public capsule build context mean zero local build.
 - **Secure by construction.** OAuth (Cognito PKCE), private VPC data plane behind CloudFront + WAF, cosign-signed images with SLSA provenance you can verify yourself.
-- **Bring your own workload.** The Workbench is just the default — the substrate is capsule-agnostic (Agent DOOM ships as an optional cartridge).
+- **Bring your own workload.** The Workbench is just the default — the substrate is capsule-agnostic; any capsule deploys as a cartridge with `substrate/deploy-capsule.sh <capsule-dir>`.
 
 ## Deploy it
 

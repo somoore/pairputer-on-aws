@@ -19,8 +19,8 @@ pairputer substrate. This supersedes the single-capsule-baked-into-the-root-stac
 
 ## Why this is right
 
-- **Capsule lifecycle ⊥ platform lifecycle.** The friction that forced a full rebuild to test agent-doom
-  (2026-07-03) disappears — capsules come and go independently.
+- **Capsule lifecycle ⊥ platform lifecycle.** The friction that once forced a full substrate rebuild to
+  test one capsule change (2026-07-03) disappears — capsules come and go independently.
 - **N capsules, no CloudFormation loops.** The "CFN has no loops" problem dissolves: there's no N-in-one
   template. Each capsule is one stack; the substrate just needs to grant the control plane permission to
   discover + control any pairputer-tagged image, and the MCP reads the tag namespace at runtime.
@@ -38,21 +38,20 @@ pairputer substrate. This supersedes the single-capsule-baked-into-the-root-stac
 - **MCP `list_capsules`/registry** reads the tag namespace at call time (cache + refresh) instead of the
   static `PAIRPUTER_IMAGE_REGISTRY` env — or keeps the env as a fallback/seed.
 
-## Migration from today's single-capsule root stack
+## Migration from the single-capsule root stack (COMPLETE 2026-07-20)
 
-Today `DoomImageStack` is a nested stack inside the root, and the registry/manifest are baked into
-AgentCore env. Steps:
-1. Extract the capsule image build into a standalone deployable stack (`capsules/hellbox-doom/stack.yaml`,
-   `capsules/agent-doom/stack.yaml`) that tags its image.
-2. Substrate stops bundling a capsule by default (or keeps hellbox as an optional convenience bundle);
-   the control plane's IAM moves from a fixed `CapsuleImageArns` list to a tag condition.
-3. MCP: tag-based discovery for `list_capsules` + per-capsule manifest read from the tag/manifest pointer.
-4. `deploy.sh` deploys the substrate; a new `deploy-capsule.sh <name>` deploys a capsule stack against it.
+The root stack originally nested a bespoke image stack with the registry/manifest baked into AgentCore
+env (capped at the 4 KB env budget). The migration is complete, and the end state goes further than
+planned: **the bundled capsule uses the exact cartridge template** (`capsules/nested/capsule-stack.yaml`)
+in `StageManifestFromContext` mode — an in-stack custom resource reads `capsule.manifest.json` out of the
+context zip in S3 and stages the chunked immutable SSM manifest itself, so even a pure console 1-click
+registers an any-size capsule with zero local tooling. The bundled default is the **Pairputer Workbench**;
+`deploy.sh` deploys the substrate, and `deploy-capsule.sh <name>` inserts any additional cartridge.
 
 ## Status (2026-07-03)
 
 **Built (additive — the existing bundled path still works):**
-- `capsules/nested/capsule-stack.yaml` — standalone capsule stack (generalized off the DOOM image stack).
+- `capsules/nested/capsule-stack.yaml` — standalone capsule stack (used for cartridges AND the bundled capsule).
   Builds ONE capsule image and tags it: `pairputer:capsule=true`, `pairputer:capsule-id/-name/-description`,
   `pairputer:capsule-manifest-ssm`, and `pairputer:capsule-release-ssm`. Keeps the proven MicroVM reaper
   (safe teardown).
@@ -107,17 +106,16 @@ measured numbers, the Workbench's reference split, and the capsule-author checkl
   this happens once at startup — a capsule inserted later is picked up on the next server start (acceptable;
   a `capsule_invoke(id,tool,args)` hot-add path is deliberately deferred until a capsule ships mid-session).
   Proven in-process by `tests/test_agent_capsule.py::test_n_capsules_each_register_their_own_tools`
-  (env capsule `doom_*` + a discovered SSM-manifest `shell_*` both register on one server).
+  (an env-seeded capsule + a discovered SSM-manifest capsule both register on one server).
 
-**Bundle retired + cartridge PROVEN LIVE (2026-07-04):**
-- The substrate now deploys BARE (`PAIRPUTER_BUNDLE_REFERENCE_CAPSULE=false ./deploy.sh`): no bundled
-  capsule, no env manifest, no DoomImageStack. agent-doom is a pure cartridge
-  (`deploy-capsule.sh agent-doom` → stack `pairputer-capsule-agent-doom`).
+**Cartridge model PROVEN LIVE (2026-07-04):**
+- The substrate deploys BARE (`PAIRPUTER_BUNDLE_REFERENCE_CAPSULE=false ./deploy.sh`): no bundled
+  capsule, no env manifest. The first reference capsule ran as a pure cartridge
+  (`deploy-capsule.sh <name>` → stack `pairputer-capsule-<name>`).
 - Verified end-to-end on AWS: the MCP **discovered the cartridge by tag, read its manifest from SSM,
-  and registered its platform-namespaced tools** (`agent_doom__observe/act/reset_episode/save_snapshot/
-  load_snapshot` + Tier 1) with ZERO capsule config on the control plane. `list_capsules` shows the
-  correct manifest name ("Agent DOOM"). `agent_doom__act` moved the live player; the agent started the
-  game itself via Tier 1 keys. Session tokens carry a per-capsule `agentInteract` claim.
+  and registered its platform-namespaced tools** with ZERO capsule config on the control plane.
+  `list_capsules` showed the correct manifest name; the capsule's typed tools drove the live session.
+  Session tokens carry a per-capsule `agentInteract` claim.
 - Deploy-path bugs fixed en route: override-validator preview-SDK hang (lazy require), suspended-VM
   image pin invisible to ListMicrovms (terminate via session-table id), MicroVM tag charset (sanitize).
 - **Hot-add SHIPPED (2026-07-04)**: `capsule_invoke(capsule_id, tool, args)` resolves the capsule's
@@ -142,7 +140,7 @@ measured numbers, the Workbench's reference split, and the capsule-author checkl
 
 ## Dual-mode capsules — local Docker AND MicroVM cartridge (2026-07-08)
 
-A capsule that carries logic (e.g. `agent-doom`'s brain) is developed and shipped in **two runtimes from
+A capsule that carries logic (an in-VM agent brain) is developed and shipped in **two runtimes from
 one source tree**:
 
 - **Local Docker** — the tight iteration loop. Run the capsule as a container, `docker cp` the changed
@@ -151,17 +149,17 @@ one source tree**:
   (never re-passed its gate) — a stale local artifact is not a prod signal.
 - **MicroVM cartridge** — the shipped shape. `deploy-capsule.sh <name>` builds the
   `AWS::Lambda::MicrovmImage`, tags it, writes its manifest to SSM; the hosted MCP tag-discovers it and
-  streams it into Codex exactly like the bundled DOOM capsule.
+  streams it into the chat host exactly like the bundled Workbench capsule.
 
 ### Packaging rule: `.contextignore`, not `.gitignore`
 
 The image build context is packed by walking the filesystem (`rsync`), so **`.gitignore` does not exclude
 anything from it** — a gitignored directory is invisible to git and the diff but still rides into the
 context zip. Each capsule carries a `.contextignore` (an rsync exclude-from) for build-irrelevant weight.
-`agent-doom`'s drops `vision_bench/` (4.1GB of model weights), eval outputs/tooling, and docs, bringing
+One capsule's `.contextignore` drops 4.1GB of eval model weights, outputs/tooling, and docs, bringing
 the context from 3.45GB back to ~192KB / 40 files with every rootfs module intact. A large manifest also
-needs SSM **Intelligent-Tiering** (`agent-doom`'s 13-tool manifest exceeds the 4KB standard-tier limit as
-JSON).
+needs SSM **Intelligent-Tiering** (a 13-tool manifest already exceeds the 4KB standard-tier limit as
+JSON; the Workbench's 33-tool manifest additionally chunks — see above).
 
 ### Deploy-freshness discipline
 
@@ -182,52 +180,10 @@ defaulted to `objective: survive`. The new brain was running the whole time. Dis
 - **`trash_microvm` before `play_capsule` after a rebuild is good hygiene** (a warm resume of the old image
   is a real trap), but rule it out by proving it dead — hash the image, cold-boot — not by assuming it.
 
-## The autopilot demo loop (agent-doom v13→v17, 2026-07-08)
-
-The agent-doom cartridge's demo mode is a **watchability system**, not an eval optimizer (see the DEMO
-contract in CLAUDE.md). The moving parts, and the invariant each protects:
-
-- **Idle-takeover autopilot** (`autopilot.py`, in-VM supervisor): human idle ~20s → drives
-  `drive_goal("clear the map of enemies and reach the exit")` in 120-tic bursts against the same bridge
-  a human/Codex uses; any human input → instant handback (arbiter revoke). Chat toggle:
-  `agent_doom__autopilot {"enabled": false}`.
-- **Async `drive_goal`**: explicit chat commands return `{status: driving, async: true}` in ~8s and run
-  the drive on a background thread. Codex hard-caps remote MCP tool calls at ~25s (`tool_timeout_sec`
-  does NOT raise it), so no synchronous drive can ever fit. `wait`/`full`/`trace_recent`/autopilot
-  callers still run sync. Explicit commands set a `_preempt` event; an in-flight autopilot burst yields
-  the lock within a step.
-- **Unstick stack** (drive-loop priority order): world-tick-freeze detector (level not simulating —
-  intermission/menu/death view → press USE/FIRE to advance), then hard-wedge escape (no physical
-  progress for 6 steps OR <16u net displacement over a 12-step window — oscillation defeats per-step
-  deltas), which first tries **wedge-door USE** (face the nearest close door line and press USE,
-  ignoring stale door memory, capped 5 presses/line and refunded when the wedge ends), then bulls toward
-  the deepest open probe.
-- **Hazard awareness**: nav cells exist only on non-damaging floors, so grid routes never wade. Combat
-  vectors (rush/close/strafe/nudge) refuse to step OFF safe floor INTO a damaging sector — probes sample
-  36/72/108u along the bearing because a single 72u sample lands on the far walkway of E1M1's zigzag
-  while the path between crosses slime. Hazard escape sprints to the nearest **climbable** (≤24u
-  step-up) standable ground, translating every step (acid ticks while you turn). Health-seeking gives up
-  on unreachable pickups (40 picks without closing distance → blacklist) instead of grinding — the
-  contract's "opportunistic, not an obsessive detour".
-- **No hidden movers**: the post-goal disengage (12 cover-retreat steps when a drive ends mid-firefight)
-  is **skipped for autopilot bursts** (the next burst starts in ~1s) and hazard-guarded otherwise. Those
-  untraced steps were the "circles into the slime" bug — every traced step looked correct while an
-  invisible retreat undid them after each burst.
-- **Death and victory both continue**: the autopilot presses USE on `player_dead` (map restarts, play
-  continues), and the world-tick-freeze detector advances the LEVEL FINISHED intermission (hitting the
-  exit used to freeze the demo forever).
-
-**Testing rules for anything that measures capsule behavior:**
-- Disable the in-VM autopilot first (`POST /autopilot {"enabled": false}`) — it interleaves its own
-  drives with your harness and corrupts every trace (it manufactured a fake "engine input latch" theory
-  worth several hours).
-- The verification bar for autopilot behavior is a **10+ minute unattended live soak** (tmux + pairputer
-  MCP, poll `observe`, judge deaths/corpse-stuck/frozen-position/map progress). Short drives and burst
-  sims all passed while the live demo was still broken; only the soak caught the corpse-forever and
-  intermission-freeze failure modes.
-
-## Open sub-decisions
-- Manifest delivery: capsule stack writes the manifest to SSM/a tag, and the MCP reads it per capsule at
-  runtime (so the control plane doesn't need redeploying when a capsule's manifest changes).
-- Whether the substrate keeps an optional "bundle hellbox for a batteries-included 1-click" convenience,
-  or 1-click = substrate + a separate capsule launch.
+## Formerly-open sub-decisions (both resolved)
+- **Manifest delivery — RESOLVED:** the capsule stack owns the manifest end to end. Script deploys stage
+  it to SSM; console deploys stage it in-stack from the context zip (`StageManifestFromContext`). The MCP
+  reads it per capsule at runtime, so a manifest change never redeploys the control plane.
+- **Batteries-included 1-click — RESOLVED:** the substrate bundles the **Pairputer Workbench** by default
+  (`BundleReferenceCapsule=true`) through the same cartridge template, so "bundled" is no longer a
+  special path — just a cartridge the root stack happens to deploy for you.

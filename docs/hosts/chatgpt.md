@@ -1,7 +1,7 @@
 # Host: ChatGPT (web + desktop)
 
 Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-08/09)** — OAuth, tools
-(incl. tag-discovered agent-doom cartridge tools), widget render, 30 FPS video through the relay
+(incl. tag-discovered capsule cartridge tools), widget render, 30 FPS video through the relay
 player iframe, keyboard/mouse/audio, gameplay, freeze/thaw/launch via widget buttons
 (widget-initiated callTool works on ChatGPT), PiP pop-out on web (floating) and desktop (docked
 panel with fill layout + stream-stall auto-recovery). Outstanding: CSP-ON retest.
@@ -11,7 +11,7 @@ domain `_meta.ui.domain`, OpenAI review — stricter for iframe embeds) is a doc
 
 ---
 
-## End-to-end setup: zero → playing DOOM in ChatGPT web
+## End-to-end setup: zero → driving the Pairputer Workbench in ChatGPT web
 
 Every step below was executed and verified live on 2026-07-08. Prerequisites: a deployed pairputer
 stack (multi-host update or later), a ChatGPT account with Developer mode available (Pro / Plus /
@@ -85,14 +85,14 @@ the app shows **Connected**.
 
 On the app's page click **Refresh** (next to Information). "Actions refreshed" should appear and
 the Actions list should show the platform tools (`play_capsule`, `freeze`, `thaw`, `trash_microvm`,
-`pairputer_session`, `list_capsules`, …) plus any capsule cartridge tools (`agent_doom__*`).
+`pairputer_session`, `list_capsules`, …) plus any capsule cartridge tools (`computer_use_desktop__*`).
 Re-click Refresh any time the server's tool surface changes — ChatGPT does not re-pull on its own.
 
 ### 7. Play
 
 New chat → type:
 
-> Use the pairputer app to open the Agent DOOM capsule (play_capsule) so I can watch it live.
+> Use the pairputer app to open the Pairputer Workbench (play_capsule) so we can share a live desktop.
 
 The widget renders inline; if the pill shows `STOPPED`/`SUSPENDED`, click the
 widget's own **🔥 Launch/Thaw** button (widget-initiated tool calls work on ChatGPT). Wait
@@ -112,7 +112,7 @@ app automatically.
 | OAuth popup opens, instantly closes, red OpenAI error | ChatGPT's connect flow requests **every** scope in Cognito's discovery (`openid email phone profile`) regardless of the connector's scope config; the client rejected the extras → `invalid_scope` bounce | The `ChatGPTClient` in `identity.yaml` allows the full standard OIDC set + `pairputer-mcp/invoke`. If you see this on an old stack, redeploy identity or `wire-chatgpt.sh --register-callback` (it re-asserts scopes too). Diagnose by replaying `/oauth2/authorize` with curl and bisecting scopes; allow ~1 min for Cognito config propagation |
 | OAuth popup shows Cognito error page | Callback not registered (`redirect_mismatch`) | Step 4 |
 | OAuth `redirect_mismatch` AFTER a deploy (was working before) | **Every `deploy.sh` re-deploys identity.yaml, and CloudFormation RESETS the ChatGPT client CallbackURLs to just the static legacy URL — dropping the per-connector callback ChatGPT uses.** | Re-run `substrate/wire-chatgpt.sh --register-callback '<the connector callback URL>'` after any deploy. The connector's callback id is stable per connector instance, so it's the same URL as before unless you deleted+recreated the connector. (wire-chatgpt.sh preserves existing callbacks + the full scope set.) |
-| Any call errors: `unknown image_id: doom` | A caller used a stale or guessed id | Expected fail-closed behavior. Run `list_capsules` and retry with the exact registered id; the widget itself defaults to the current capsule. |
+| Any call errors: `unknown image_id: …` | A caller used a stale or guessed id | Expected fail-closed behavior. Run `list_capsules` and retry with the exact registered id; the widget itself defaults to the current capsule. |
 | "No app actions available yet" | ChatGPT hasn't pulled tools | Step 6 (Refresh) |
 | Widget shows stale behavior after a server redeploy | ChatGPT caches the widget resource per app version | Settings → Apps → pairputer → **Refresh** (bumps the version), then reload the conversation — reload alone is NOT enough |
 | Tool calls time out | ChatGPT's tool budget is ~60 s | `play_capsule` cold boot (~15–30 s) fits; anything longer must return fast (see the fire-and-forget `drive_goal` pattern) |

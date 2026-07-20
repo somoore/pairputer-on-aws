@@ -72,8 +72,8 @@ replaying `/oauth2/authorize` with curl and bisecting scopes; allow ~1 min Cogni
 
 ### Widget wall discovered — never hardcode a default capsule id in app.html
 ChatGPT rendered the widget from a state read (no play payload), so the widget's old hardcoded
-`imageId='doom'` poisoned explicit calls (`thaw` → "unknown image_id: doom") on a stack whose sole
-capsule is `agent-doom`. Fixed: empty default; the server resolves `""` to the sole capsule.
+a stale hardcoded `imageId` default poisoned explicit calls (`thaw` → "unknown image_id") on a stack
+whose sole capsule had a different id. Fixed: empty default; the server resolves `""` to the sole capsule.
 Locked by tests/test_hosts.py.
 
 ### Dev-mode CSP toggle exists (Settings → Apps → Advanced): "Enforce CSP in developer mode"
@@ -82,7 +82,7 @@ OFF (default): dev widgets get unrestricted network. Before trusting any CSP-dep
 Current testing ran with CSP OFF (badge shows on the widget).
 
 ### Live milestone (2026-07-08, ChatGPT web, dev-mode, CSP off)
-DOOM streamed at 30 FPS in the ChatGPT widget through the UNCHANGED relay player iframe
+The capsule streamed at 30 FPS in the ChatGPT widget through the UNCHANGED relay player iframe
 (frameDomains honored); click fired a shot (ammo 56→55), arrow keys turned, human input revoked the
 in-VM autopilot (arbiter working); Freeze → SUSPENDED·billing-paused → Thaw → same session resumed.
 The whole Codex data plane ported with ZERO relay/player changes.
@@ -93,7 +93,7 @@ Pop out → PiP (floating window, chat scrolls beneath) → back inline: the pla
 SSE streams stayed live through both transitions (30 FPS continuous, no remount observed on web).
 The widgetState boot fallback remains in place for hosts/platforms that DO remount (Android bug).
 
-### PROBE-9 FINAL — Claude streams DOOM live: ✅ (2026-07-09, human-confirmed)
+### PROBE-9 FINAL — Claude streams the capsule live: ✅ (2026-07-09, human-confirmed)
 Full parity: widget renders + reveals, and video/audio/keyboard/mouse work via the direct-connect
 in-widget player (Claude blocks frame-src, so no iframe). Root-caused entirely in a local host
 harness. See docs/hosts/claude.md for the full fix chain (nested meta, appInfo handshake,

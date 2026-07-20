@@ -20,8 +20,8 @@ new-host work doesn't re-learn them (sources: CLAUDE.md walls, blog2.md).
   fails.
 - **One widget per `tools/call`** — Codex paints a fresh player widget for EVERY tool call, so a
   retried `play_capsule` STACKS a second (stream-starved) player. Seen live 2026-07-09: the model
-  called `play_capsule(image_id="doom")` (the legacy id) → server raised `unknown image_id` → model
-  retried with `agent-doom` → two stacked widgets, the second stuck "FPS 0 · reconnecting". The widget
+  called `play_capsule` with a stale legacy image id → server raised `unknown image_id` → model
+  retried with the current id → two stacked widgets, the second stuck "FPS 0 · reconnecting". The widget
   now defaults to the current capsule; server routing nevertheless requires an exact registered id so a
   stale tool can never cross-bind to a different sole capsule. ChatGPT/Claude render one delivered
   payload rather than one widget per call.
