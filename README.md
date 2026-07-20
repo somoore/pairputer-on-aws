@@ -6,55 +6,55 @@
   </picture>
 </div>
 
-**Stream a live Linux MicroVM into your AI chat — video, audio, keyboard, mouse — running entirely in your own AWS account.**
+**Stream a live Linux MicroVM into your AI chat. Video, audio, keyboard, mouse. Runs entirely in your own AWS account.**
 
-pairputer is a deployable *substrate*: it runs an interactive **capsule** (a Lambda MicroVM workload) and streams it inline into an AI chat client, where a human gets a live viewport and — soon — the model gets a controlled tool surface. It suspends on idle (**Freeze**) and resumes on demand (**Thaw**), so you only pay while you're using it.
+pairputer is a deployable *substrate*: it runs an interactive **capsule** (a Lambda MicroVM workload) and streams it inline into an AI chat client. You get a live viewport, the model gets a controlled tool surface, and you're both driving the same machine. It suspends on idle (**Freeze**) and resumes on demand (**Thaw**), so you only pay while you're actually using it.
 
-**One server, one widget, three hosts — all live and human-confirmed:** **OpenAI Codex**, **ChatGPT** (web + desktop), and **Claude** (web + desktop). Once connected, open the reference capsule with a single prompt:
+**One server, one widget, three hosts, all live and human-confirmed:** **OpenAI Codex**, **ChatGPT** (web + desktop), and **Claude** (web + desktop). Once connected, open the reference capsule with a single prompt:
 
 > Use the pairputer app to open the Pairputer Workbench (play_capsule) so we can share a live desktop.
 
 Per-host connector setup: [`docs/hosts/codex.md`](./docs/hosts/codex.md) · [`docs/hosts/chatgpt.md`](./docs/hosts/chatgpt.md) · [`docs/hosts/claude.md`](./docs/hosts/claude.md).
 
-The bundled reference capsule is the **Pairputer Workbench** — a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. Your git identity, editor settings, and projects survive Freeze, Thaw, and even Trash via the durable per-tenant workspace.
+The bundled reference capsule is the **Pairputer Workbench**: a disposable, resumable Linux dev desktop (browser, VS Code, terminal) that you and whichever frontier AI you prefer operate together. Your git identity, editor settings, and projects survive Freeze, Thaw, and even Trash, thanks to the durable per-tenant workspace.
 
 ## Why pairputer
 
-- **Runs in *your* AWS account.** No third-party SaaS holds your session; no static credentials leave your machine.
-- **True 1-click.** Signed, digest-pinned public images + a public capsule build context mean zero local build.
-- **Secure by construction.** OAuth (Cognito PKCE), private VPC data plane behind CloudFront + WAF, cosign-signed images with SLSA provenance you can verify yourself.
-- **Bring your own workload.** The Workbench is just the default — the substrate is capsule-agnostic; any capsule deploys as a cartridge with `substrate/deploy-capsule.sh <capsule-dir>`.
+- **Runs in *your* AWS account.** No third-party SaaS holds your session, and no static credentials leave your machine.
+- **True 1-click.** Signed, digest-pinned public images plus a public capsule build context. Nothing to build locally.
+- **Secure by construction.** OAuth (Cognito PKCE), a private VPC data plane behind CloudFront + WAF, and cosign-signed images with SLSA provenance you can verify yourself.
+- **Bring your own workload.** The Workbench is just the default. The substrate is capsule-agnostic, and any capsule deploys as a cartridge with `substrate/deploy-capsule.sh <capsule-dir>`.
 
 ## Deploy it
 
-There are **two completely separate ways to deploy** — pick ONE, not both:
+There are **two completely separate ways to deploy**. Pick ONE, not both:
 
-- **Path A (recommended): the 1-click CloudFormation launch.** No tools, no clone, no Docker — everything
+- **Path A (recommended): the 1-click CloudFormation launch.** No tools, no clone, no Docker. Everything
   builds in your account from signed public images.
 - **Path B: `substrate/deploy.sh`.** A full from-source CLI deploy for developers who want to build the
   images themselves or customize. It replaces the 1-click; never run it on top of one.
 
-Both land in your account. **`us-east-1` is the tested & recommended region.** The template
-isn't hard-locked to it, but other regions are unverified and on-your-own: the CloudFront-scope WAF only
-exists in `us-east-1` (deploy elsewhere and it's skipped unless you pass your own `WebAclArn`), and
+Both land in your account. **`us-east-1` is the tested and recommended region.** The template isn't
+hard-locked to it, but other regions are unverified and you're on your own there: the CloudFront-scope WAF
+only exists in `us-east-1` (deploy elsewhere and it's skipped unless you pass your own `WebAclArn`), and
 Bedrock AgentCore + Lambda MicroVM availability varies by region.
 
-### 🚀 Path A — 1-click CloudFormation launch (recommended)
+### 🚀 Path A - 1-click CloudFormation launch (recommended)
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://pairputer-launch.s3.amazonaws.com/templates/pairputer.yaml&stackName=pairputer)
 
-Click the button, enter **one input — your email address** (it becomes the super-admin account and receives the invite), and deploy. Everything else defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account.
+Click the button, enter **one input: your email address** (it becomes the super-admin account and receives the invite), and deploy. Everything else defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account.
 
-After it finishes, you get an **admin invite email** with your temporary password and the exact steps to connect Codex — including a one-line setup command. Then `codex mcp login pairputer` and play.
+After it finishes, you get an **admin invite email** with your temporary password and the exact steps to connect Codex, including a one-line setup command. Then `codex mcp login pairputer` and play.
 
-*Want to verify the images first?* Run [`scripts/verify-images.sh`](./scripts/verify-images.sh) — an offline cosign signature + SLSA check.
+*Want to verify the images first?* Run [`scripts/verify-images.sh`](./scripts/verify-images.sh), an offline cosign signature + SLSA check.
 
-**💸 What does it create, and what does it cost?** See [**docs/1-click-cost.md**](./docs/1-click-cost.md)
-— a complete inventory of every AWS resource and IAM role the 1-click deploys (each linked to its
-CloudFormation source) plus honest daily/weekly/monthly cost estimates. TL;DR: ≈ **$55–60/month**
-always-on, ≈ **$0.60 per active hour** of Workbench use, ≈ $0 while Frozen.
+**💸 What does it create, and what does it cost?** See [**docs/1-click-cost.md**](./docs/1-click-cost.md):
+a complete inventory of every AWS resource and IAM role the 1-click deploys (each linked to its
+CloudFormation source) plus honest daily/weekly/monthly cost estimates. TL;DR: roughly **$55-60/month**
+always-on, about **$0.60 per active hour** of Workbench use, and near $0 while Frozen.
 
-### 🛠️ Path B — `deploy.sh` (from-source CLI, separate from the 1-click)
+### 🛠️ Path B - `deploy.sh` (from-source CLI, separate from the 1-click)
 
 Use this **instead of** the 1-click when you want to **build the images from source**, use **private ECR**, or have Codex wired up **automatically**:
 
@@ -63,12 +63,12 @@ git clone https://github.com/somoore/pairputer && cd pairputer
 substrate/deploy.sh
 ```
 
-`deploy.sh` builds + pushes the MCP and relay images, packages the capsule, deploys the whole nested stack, creates your super-admin, **and wires `~/.codex/config.toml` for you** (writes the server block + registers the OAuth callback). One command, ready to log in. See [`substrate/README.md`](./substrate/README.md) for options.
+`deploy.sh` builds and pushes the MCP and relay images, packages the capsule, deploys the whole nested stack, creates your super-admin, **and wires `~/.codex/config.toml` for you** (writes the server block and registers the OAuth callback). One command, ready to log in. See [`substrate/README.md`](./substrate/README.md) for options.
 
 ## Options worth knowing
 
-- **Image source** *(first parameter)* — `Public` (default, our signed images) or `Private` (your own private-ECR images; leave URIs blank to auto-copy ours into your account, verified first).
-- **Bundle reference capsule** *(default on)* — ships the Pairputer Workbench so the substrate is useful out of the box. Turn it off for a **bare substrate** with no capsule.
+- **Image source** *(first parameter)*: `Public` (default, our signed images) or `Private` (your own private-ECR images; leave the URIs blank to auto-copy ours into your account, verified first).
+- **Bundle reference capsule** *(default on)*: ships the Pairputer Workbench so the substrate is useful out of the box. Turn it off for a **bare substrate** with no capsule.
 
 ## Remove everything
 
@@ -78,11 +78,11 @@ substrate/remove-cf.sh --all      # also remove the artifact bucket + ECR repos
 substrate/remove-cf.sh --all --yes  # no confirmation prompt
 ```
 
-Cartridge capsule stacks (`pairputer-capsule-*`) are deleted first automatically — each one's reaper
-terminates leftover MicroVMs and deletes its image. Then the root stack tears down every nested stack
+Cartridge capsule stacks (`pairputer-capsule-*`) are deleted first automatically. Each one's reaper
+terminates leftover MicroVMs and deletes its image, then the root stack tears down every nested stack
 in dependency order. Nothing is left running, so the bill stops.
 
 ## Learn more
 
-- [`docs/architecture.md`](./docs/architecture.md) — how the pieces fit (diagram)
-- [`SECURITY.md`](./SECURITY.md) — the end-to-end supply-chain + trust model
+- [`docs/architecture.md`](./docs/architecture.md): how the pieces fit (diagram)
+- [`SECURITY.md`](./SECURITY.md): the end-to-end supply-chain and trust model

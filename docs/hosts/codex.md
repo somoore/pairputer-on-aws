@@ -7,18 +7,18 @@ new-host work doesn't re-learn them (sources: CLAUDE.md walls, blog2.md).
 
 - **Bridge:** `window.openai` (Apps SDK dialect). Reads `openai/outputTemplate` on tools; resource
   mime `text/html;profile=mcp-app`.
-- **No cross-origin ANYTHING from the widget** — fetch, EventSource, WebSocket all blocked before
+- **No cross-origin ANYTHING from the widget** - fetch, EventSource, WebSocket all blocked before
   CSP (`connectDomains` not honored). The relay player iframe (frame escape hatch via
   `frameDomains`) is the only data path. Input rides batched `POST /input` because `connect-src`
   allows only `https://` (wall #10).
 - **Inline display mode only.** `requestDisplayMode` returns `inline`; the widget's granted-mode
   handling degrades gracefully.
-- **~25s hard tool-call ceiling** (remote MCP; `tool_timeout_sec` does NOT raise it — see
+- **~25s hard tool-call ceiling** (remote MCP; `tool_timeout_sec` does NOT raise it - see
   memory/codex-mcp-tool-timeout-25s). Anything long returns fast + rides the live stream.
-- **Widget-initiated `callTool` is unreliable** (wall #17) — the launch payload must ride the
+- **Widget-initiated `callTool` is unreliable** (wall #17) - the launch payload must ride the
   initial `play_capsule` result; token refresh degrades to the reconnect overlay when callTool
   fails.
-- **One widget per `tools/call`** — Codex paints a fresh player widget for EVERY tool call, so a
+- **One widget per `tools/call`** - Codex paints a fresh player widget for EVERY tool call, so a
   retried `play_capsule` STACKS a second (stream-starved) player. Seen live 2026-07-09: the model
   called `play_capsule` with a stale legacy image id → server raised `unknown image_id` → model
   retried with the current id → two stacked widgets, the second stuck "FPS 0 · reconnecting". The widget
@@ -29,7 +29,7 @@ new-host work doesn't re-learn them (sources: CLAUDE.md walls, blog2.md).
   `ui://pairputer-platform/app.html` + mime must NEVER change (locked by tests/test_hosts.py). Ship
   new widget HTML by changing the SERVER NAME; restart the Codex app to bust HTML cache.
 - **OAuth:** static public PKCE client (`CodexClientId`), callback
-  `http://localhost:5555/callback/<base64url(sha256(McpEndpoint)[:9])>` — computed + registered at
+  `http://localhost:5555/callback/<base64url(sha256(McpEndpoint)[:9])>` - computed + registered at
   deploy time (agentcore.yaml CallbackRegistration) and by `wire-codex.sh`.
 
 ## Setup

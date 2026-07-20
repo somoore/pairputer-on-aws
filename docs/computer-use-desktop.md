@@ -1,6 +1,6 @@
 # Pairputer Workbench implementation index
 
-This document tracks the `computer-use-desktop` capsule implementation — the **Pairputer Workbench**,
+This document tracks the `computer-use-desktop` capsule implementation - the **Pairputer Workbench**,
 the substrate's bundled reference capsule. The generalized substrate remains capsule-agnostic; other
 capsules deploy as cartridges alongside it.
 
@@ -14,39 +14,39 @@ capsules deploy as cartridges alongside it.
 - Default presentation: `hybrid`; idle assistance is off unless a task contract explicitly enables it.
 - Capsule IAM: none.
 
-## Known limitation — proactive idle auto-suspend is not implemented (2026-07-12)
+## Known limitation - proactive idle auto-suspend is not implemented (2026-07-12)
 
 The widget's "Auto-suspend" selector sets the AWS MicroVM `idlePolicy.maxIdleDurationSeconds`, applied
 at run/resume. But the MicroVM runs with `autoResumeEnabled: true`, and the workbench holds an always-on
-video/audio stream — so the platform idle timer effectively never trips while a viewer is connected (any
+video/audio stream - so the platform idle timer effectively never trips while a viewer is connected (any
 traffic re-wakes the VM). Net effect: the box does NOT auto-freeze on its own when a human walks away; it
-only suspends on an explicit **Freeze** (which the relay suspend-guard now makes reliable — walls #21/#22).
+only suspends on an explicit **Freeze** (which the relay suspend-guard now makes reliable - walls #21/#22).
 Real proactive idle-suspend needs **app-level idle detection** (track last human input via the input
 arbiter; auto-invoke `freeze()` after the chosen window when no input AND no active drive). Deferred by
 choice; the guard + explicit Freeze is the shipped behavior. See [walls #21/#22](walls-and-lessons.md).
 
-## Human desktop shell — dock + on-demand browser (2026-07-13)
+## Human desktop shell - dock + on-demand browser (2026-07-13)
 
 The desktop is AI-driven (typed `apps_open`/`browser_open`), but a human who takes the wheel gets a
 usable shell:
 
 - **App-launcher dock** (`launcher-panel.py`): a GTK top bar (Pairputer · Files · Editor · Browser ·
   VS Code · Terminal) started from `session.sh`. **Run it with `python3` (system 3.9), NEVER
-  `python3.11`** — PyGObject (`gi`) is only installed for 3.9; 3.11 has no `gi` and the launcher
+  `python3.11`** - PyGObject (`gi`) is only installed for 3.9; 3.11 has no `gi` and the launcher
   crash-loops invisibly (wall #24). `python-xlib` (3.11-only, used for the `_NET_WM_STRUT` reservation)
   is imported defensively, so the strut is simply skipped on 3.9 and the dock still shows via its DOCK
   hint + keep_above.
 - **The browser NEVER auto-opens.** Chromium is not launched at boot and readiness does not gate on it
-  (`chromium_cdp`/`chromium_visible` are informational only). It starts ONLY on demand — dock Browser/VS
+  (`chromium_cdp`/`chromium_visible` are informational only). It starts ONLY on demand - dock Browser/VS
   Code buttons, `apps_open("browser")`, or `browser_open`. `browser_open` launches it if CDP is down
   (`_ensure_browser`); a cold CDP start can exceed the ~22s tool budget, so it returns
   `reason=browser_starting, retrySafety=safe` and the retry lands on a warm browser (wall #25).
 - **Debugging the desktop headlessly:** `PAIRPUTER_DEBUG=true` exposes `/vmdbg?f=session`, which serves a
   root-owned `/var/log/pairputer-session.log` (session.sh stderr + an Xlib window-geometry dump). This is
-  how the `gi` crash-loop was finally found — reach for it before blind-iterating image rebuilds.
+  how the `gi` crash-loop was finally found - reach for it before blind-iterating image rebuilds.
 
 Open follow-up: code-server (VS Code in the browser) shows a WebSocket 1006 error when reached via the
-`pairputer-preview.invalid` http proxy domain — the browser treats it as an insecure context. Functional
+`pairputer-preview.invalid` http proxy domain - the browser treats it as an insecure context. Functional
 enough to render, but the live WebSocket features degrade; not yet chased.
 
 ## Workstream ownership
@@ -79,21 +79,21 @@ Deployed validation is required for MicroVM build, authenticated proxying, relay
 freeze/thaw reconciliation, tag/SSM discovery, hot-add invocation, and removal. Never weaken a local
 security invariant to make the deployed path pass.
 
-## Verified release snapshot — 2026-07-12 (current)
+## Verified release snapshot - 2026-07-12 (current)
 
 - AWS: `pairputer-capsule-computer-use-desktop` CREATE_COMPLETE; Workbench **image version 10.0** active.
   Version history: v1 first prod deploy; v2 agent-cursor attribution; v3 slim tool surface; v4 durable
-  per-tenant workspace; v6 first cursor-glide; v7–v8 universal-presence + read-only regressions; v9
+  per-tenant workspace; v6 first cursor-glide; v7-v8 universal-presence + read-only regressions; v9
   X-capture fix; **v10 the `/observe` 502 fix**. The full multi-round live-QA arc (freeze auto-thaw,
   trash-doesn't-stick, stream jitter, live-push "next launch" bug, fullscreen/PiP, visible cursor, the
-  `/observe` 502, cold-boot X-capture flakiness) is documented in `live-qa-2026-07-12.md` — READ IT
+  `/observe` 502, cold-boot X-capture flakiness) is documented in `live-qa-2026-07-12.md` - READ IT
   before touching the widget lifecycle, the bridge dispatcher, or the presentation layer.
 - **Durable per-tenant workspace + chat-reachable storage** (v4): `workspace/persistent/` mirrors to
   a per-tenant S3 prefix at freeze/trash and restores on fresh boot; the `persistent_storage` platform
   tool + widget Files drawer reach it with NO VM running. See `persistent-workspace.md`.
 - **Visible-by-default cursor presence** (v6+): a `_present_action` bridge hook glides the real cursor
   to an action's screen target (browser/UI/app) or keeps the owner=agent halo lit for locationless
-  actions (file/shell). The halo is a WIDGET overlay over the video — not in VM pixels. KNOWN GAP: the
+  actions (file/shell). The halo is a WIDGET overlay over the video - not in VM pixels. KNOWN GAP: the
   browser glide-to-target is inconsistent (CDP fresh-tab geometry often fails → in-place nudge). See
   `open-multi-dialect-surface.md`.
 - Earlier state (image v3.0, commits `bb2f045`/`1226af2`/`cb367ca`): all CI-green; 934 tests then, 941+
@@ -101,7 +101,7 @@ security invariant to make the deployed path pass.
 - **Slim advertised surface**: exactly **12 of 33** tools registered in `tools/list` (observe,
   screenshot, computer_action, ground_target, drive_task, task_status, run_command,
   workspace_read/write/upload, browser_open, browser_query). The other 21 carry `advertise: false`
-  in the manifest — identical gates, callable via `capsule_invoke` (`capsule_id`, namespaced or bare
+  in the manifest - identical gates, callable via `capsule_invoke` (`capsule_id`, namespaced or bare
   tool name), discoverable via `capsule_metadata`. A contract test pins the advertised set. This is a
   per-turn context-cost optimization only; no capability changed.
 - Deploy walls fixed en route: manifests over the 8 KiB SSM cap are now **chunked** across immutable
@@ -117,11 +117,11 @@ security invariant to make the deployed path pass.
   sha via the hidden `workspace_describe` through `capsule_metadata` → `capsule_invoke` discovery
   (SLIM-PASS).
 - Agent-cursor attribution is truthful under sustained agent driving (receipts + `observe` both report
-  owner=agent, zero spurious human-takeovers/drops, ~1.5s decay to idle) — three live-found races fixed
+  owner=agent, zero spurious human-takeovers/drops, ~1.5s decay to idle) - three live-found races fixed
   in `input_ws.py` (stale receipt snapshot; note-after-inject window; one-shot XResetScreenSaver edges
   debounced with a two-poll requirement).
 
-## Verified release snapshot — 2026-07-10 (superseded)
+## Verified release snapshot - 2026-07-10 (superseded)
 
 - Source and deployed capsule context SHA-256:
   `82b76230c8fd5dd3dabb6dc2d7f24db6c7076151c5d45846367da6334ceb17cd`.
