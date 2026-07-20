@@ -818,11 +818,11 @@ Outputs:
   McpEndpoint:
     Description: The pre-encoded MCP URL to put in Codex config.toml.
     Value: !GetAtt AgentCoreStack.Outputs.McpEndpoint
-  CodexConfigToml:
+  McpFullEndpoint:
     Description: >-
-      START HERE to connect Codex. This is the COMPLETE, ready-to-paste block for ~/.codex/config.toml
-      with your live endpoint + client id already filled in (no placeholders). Copy this entire value
-      verbatim into ~/.codex/config.toml, then run: codex mcp login pairputer
+      The complete MCP connection block (endpoint + OAuth client id, no secrets). Codex users can paste
+      this entire value verbatim into ~/.codex/config.toml and run: codex mcp login pairputer. For
+      ChatGPT/Claude connectors you only need the McpEndpoint output above.
     Value: !Sub
       - |-
         [mcp_servers.pairputer]
