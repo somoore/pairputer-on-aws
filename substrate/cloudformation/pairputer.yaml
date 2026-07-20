@@ -181,11 +181,17 @@ Parameters:
   ReferenceCapsuleName:
     Type: String
     Default: Pairputer Workbench
-    Description: Display name for the bundled reference capsule. deploy.sh fills from capsule.yaml.
+    Description: >-
+      Display name for the bundled reference capsule. deploy.sh fills from capsule.yaml. Becomes a
+      MicroVM image tag - only letters/digits/spaces and _.:/=+-@ are allowed (no commas).
+    AllowedPattern: '^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$'
   ReferenceCapsuleDescription:
     Type: String
-    Default: A persistent, streamed Linux workstation shared by a human and an agent — browser, editor, terminal, verified task execution.
-    Description: Display description for the bundled reference capsule. deploy.sh fills from capsule.yaml.
+    Default: A persistent streamed Linux workstation shared by a human and an agent - browser / editor / terminal with verified task execution.
+    Description: >-
+      Display description for the bundled reference capsule. deploy.sh fills from capsule.yaml. Becomes
+      a MicroVM image tag - only letters/digits/spaces and _.:/=+-@ are allowed (no commas).
+    AllowedPattern: '^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$'
   SuperAdminEmail:
     Type: String
     Default: ""
