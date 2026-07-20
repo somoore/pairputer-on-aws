@@ -1,6 +1,6 @@
 # pairputer supply-chain security
 
-pairputer is deployed by strangers into their own AWS accounts. The moment the deploy path stops being
+pairputer is deployed by people into their own AWS accounts. The moment the deploy path stops being
 "you build it yourself" and becomes "pull artifacts we published," **supply-chain integrity becomes the
 platform's core trust guarantee.** This doc is the end-to-end spec: every artifact a deployer trusts, and
 exactly how it is verified — with a bias toward *provable in the deployer's own account*, not "trust us."
