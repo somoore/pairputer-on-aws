@@ -750,6 +750,46 @@ def _resolve_image_id(image_id: str | None) -> str:
     raise ValueError(f"unknown capsule image_id {image_id!r}; available: {available}")
 
 
+def _resolve_recovery_image_id(identity: "CallerIdentity", image_id: str | None) -> str:
+    """image_id resolver for widget recovery ops (thaw/freeze/pairputer_session).
+
+    Same as _resolve_image_id, but when image_id is empty AND multiple capsules are deployed, recover
+    the capsule from THIS caller's own live VM instead of refusing. The widget can remount without its
+    imageId (a suspended card's replayed toolOutput carries none), so Thaw would otherwise hit the
+    multi-capsule guard even though the caller has exactly one VM to resume — never ambiguous. Falls
+    back to _resolve_image_id (which refuses with the list) if the caller has zero, or more than one,
+    capsule with a live microvm. Best-effort: any lookup failure falls through to the strict resolver."""
+    if image_id or LOCAL_MODE:
+        return _resolve_image_id(image_id)
+    reg = _effective_registry()
+    if len(reg) <= 1:
+        return _resolve_image_id(image_id)  # sole/no capsule: existing behavior
+    try:
+        table = _session_table()
+        kwargs = {
+            "KeyConditionExpression": Key("pk").eq(_session_pk(identity)) & Key("sk").begins_with("IMAGE#"),
+            "FilterExpression": Attr("microvm_id").exists(),
+        }
+        live = []
+        while True:
+            out = table.query(**kwargs)
+            for it in out.get("Items", []):
+                if it.get("microvm_id") and str(it.get("state") or "") in ("RUNNING", "SUSPENDED"):
+                    cid = it.get("image_id")
+                    if cid in reg:
+                        live.append(cid)
+            last = out.get("LastEvaluatedKey")
+            if not last:
+                break
+            kwargs["ExclusiveStartKey"] = last
+        uniq = sorted(set(live))
+        if len(uniq) == 1:
+            return uniq[0]
+    except Exception as exc:  # never let recovery lookup mask the real resolver
+        log.warning("recovery image_id lookup failed: %s", type(exc).__name__)
+    return _resolve_image_id(image_id)  # zero/ambiguous -> refuse with the list, as before
+
+
 def _tier_image_id(image_id: str, memory_mib: int | None) -> str:
     """Resolve a capsule to its memory-tier sibling image. Memory is fixed at MicroVM-image build
     time (RunMicrovm has no memory param), so a bigger tier is a SEPARATE image built from the same
@@ -2016,7 +2056,7 @@ def pairputer_session(ctx: Context, image_id: str = "", ensure_running: bool = F
     ensure_running=True to recover if the old VM aged out.
     """
     identity = _caller_identity(ctx)
-    image_id = _resolve_image_id(image_id)
+    image_id = _resolve_recovery_image_id(identity, image_id)
     if ensure_running:
         # Same concurrency retry as play_capsule: the widget self-heal calls this during a double-open
         # race, so a SessionConflict must resolve to the winning session, not surface as an error.
@@ -2049,7 +2089,7 @@ def pairputer_session(ctx: Context, image_id: str = "", ensure_running: bool = F
 def freeze(ctx: Context, image_id: str = "") -> CallToolResult:
     """Suspend this caller's MicroVM for the requested capsule (defaults to the sole/first capsule)."""
     identity = _caller_identity(ctx)
-    image_id = _resolve_image_id(image_id)
+    image_id = _resolve_recovery_image_id(identity, image_id)
     item, vm = _discover_vm(identity, image_id)
     if not vm.get("id"):
         relay_action = _scale_relay_to_zero_if_idle()
@@ -2123,8 +2163,8 @@ def freeze(ctx: Context, image_id: str = "") -> CallToolResult:
 @mcp.tool(meta={"openai/widgetAccessible": True})
 def thaw(ctx: Context, image_id: str = "") -> CallToolResult:
     """Resume this caller's suspended MicroVM for the requested capsule (defaults to the sole/first)."""
-    cid = _resolve_image_id(image_id)
     identity = _caller_identity(ctx)
+    cid = _resolve_recovery_image_id(identity, image_id)
     payload = _play(identity, cid)
     payload["capsuleLifecycle"] = _capsule_lifecycle_hook(identity, cid, "afterThaw")
     return _widget_result(payload, image_id=cid, state="RUNNING")
