@@ -54,7 +54,8 @@ Resources:
             <div style="margin:0;padding:24px 12px;background:#0b0d12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#e6e9ef;">
             <div style="max-width:600px;margin:0 auto;background:#12151d;border:1px solid #232838;border-radius:14px;overflow:hidden;">
             <div style="padding:26px 30px 18px;border-bottom:1px solid #232838;">
-            <div style="font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:#7c5cff;font-weight:700;">pairputer</div>
+            <img src="https://pairputer-launch.s3.amazonaws.com/third-party/brand/pairputer-logo-dark.png" alt="pairputer" width="210" style="display:block;width:210px;max-width:60%;height:auto;border:0;outline:none;" />
+
             <div style="font-size:22px;font-weight:700;margin-top:6px;color:#fff;">Your admin access is ready</div>
             <div style="font-size:14px;color:#9aa3b5;margin-top:6px;line-height:1.5;">You deployed pairputer and set <b style="color:#e6e9ef;"><span style="color:#e6e9ef;text-decoration:none;">&#8204;{username}&#8204;</span></b> as the first super-admin. Here's your temporary password, then one connection step so Codex can reach your deployment.</div>
             </div>

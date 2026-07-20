@@ -178,7 +178,7 @@ Resources:
                 Resource: "*"
 
   # --- In-stack manifest stager (console/1-click path) ----------------------------------------------
-  # Reads capsule.manifest.json (validated compact JSON, embedded by package-doom-image.sh) out of the
+  # Reads capsule.manifest.json (validated compact JSON, embedded by package-capsule-image.sh) out of the
   # context zip in S3 and stages it into SSM in EXACTLY the layout deploy-capsule.sh stages script-side:
   # gzip+base64 value, chunked into immutable /partN parameters above 8 KiB with a chunked:v1 header,
   # content-addressed primary path, parts-first write order, fail-closed immutable collision checks.
@@ -278,7 +278,7 @@ Resources:
                       try:
                           manifest = json.loads(zf.read("capsule.manifest.json"))
                       except KeyError:
-                          raise ValueError("context zip has no capsule.manifest.json; repackage with package-doom-image.sh")
+                          raise ValueError("context zip has no capsule.manifest.json; repackage with package-capsule-image.sh")
                   if (manifest.get("capsule") or {}).get("id") != capsule_id:
                       raise ValueError("capsule.manifest.json id does not match CapsuleId")
                   manifest["capsule"]["deployment"] = {"contextSha256": ctx_sha, "contextUri": ctx_uri}

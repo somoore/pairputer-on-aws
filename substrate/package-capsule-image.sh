@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# Package the pairputer DOOM MicroVM build context.
+# Package a pairputer capsule MicroVM build context (any capsule dir under capsules/).
 #
-# The output is intentionally WAD-free. The Dockerfile fetches the pinned
-# shareware DOOM1.WAD during the AWS-managed MicroVM image build and verifies
-# the SHA-256 before snapshotting the image.
+# The output is intentionally free of licensed game data (WAD-free). A capsule
+# whose Dockerfile needs such data fetches it pinned + SHA-256-verified during
+# the AWS-managed MicroVM image build instead of shipping it in the context.
 #
 # Usage:
-#   ./package-doom-image.sh                         # create local zip, print path
-#   ./package-doom-image.sh <s3-bucket> [s3-prefix] # upload, print s3:// URI
+#   ./package-capsule-image.sh                         # create local zip, print path
+#   ./package-capsule-image.sh <s3-bucket> [s3-prefix] # upload, print s3:// URI
 #
 # Optional WAD mirror override for private/org builds:
 #   PAIRPUTER_DOOM1_WAD_URL=https://mirror.example/DOOM1.WAD \
 #   PAIRPUTER_DOOM1_WAD_SHA256=<64-hex-sha256> \
-#   ./package-doom-image.sh <s3-bucket>
+#   ./package-capsule-image.sh <s3-bucket>
 
 set -euo pipefail
 

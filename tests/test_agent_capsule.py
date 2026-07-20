@@ -553,16 +553,16 @@ class TestPlumbing(unittest.TestCase):
         self.assertIn("capsule.yaml", DEPLOY)
         self.assertIn("CapsuleManifestJson=", DEPLOY)
 
-    def test_redeploy_preserves_stack_managed_doom_image_ownership(self):
-        self.assertIn("STACK_MANAGES_DOOM_IMAGE", DEPLOY)
-        self.assertIn("--logical-resource-id DoomImageStack", DEPLOY)
-        self.assertIn('elif [[ "${STACK_MANAGES_DOOM_IMAGE}" == "true" ]]', DEPLOY)
-        managed = DEPLOY.index('elif [[ "${STACK_MANAGES_DOOM_IMAGE}" == "true" ]]')
+    def test_redeploy_preserves_stack_managed_capsule_image_ownership(self):
+        self.assertIn("STACK_MANAGES_CAPSULE_IMAGE", DEPLOY)
+        self.assertIn("--logical-resource-id CapsuleImageStack", DEPLOY)
+        self.assertIn('elif [[ "${STACK_MANAGES_CAPSULE_IMAGE}" == "true" ]]', DEPLOY)
+        managed = DEPLOY.index('elif [[ "${STACK_MANAGES_CAPSULE_IMAGE}" == "true" ]]')
         adopt = DEPLOY.index("Found existing MicroVM image", managed)
         self.assertLess(managed, adopt)
 
     def test_stack_ownership_lookup_only_treats_confirmed_not_found_as_absent(self):
-        start = DEPLOY.index("detect_doom_stack_ownership()")
+        start = DEPLOY.index("detect_capsule_stack_ownership()")
         end = DEPLOY.index("\n}\n", start) + 3
         helper = DEPLOY[start:end]
         script = r'''
@@ -571,7 +571,7 @@ aws() {
   printf '%s' "${FAKE_AWS_STDERR:-}" >&2
   return "${FAKE_AWS_RC:-0}"
 }
-''' + helper + '\ndetect_doom_stack_ownership fixture us-east-1\n'
+''' + helper + '\ndetect_capsule_stack_ownership fixture us-east-1\n'
 
         def run(*, stdout="", stderr="", rc=0):
             env = dict(os.environ, FAKE_AWS_STDOUT=stdout, FAKE_AWS_STDERR=stderr, FAKE_AWS_RC=str(rc))
@@ -590,7 +590,7 @@ aws() {
 
         absent_resource = run(rc=255, stderr=(
             "An error occurred (ValidationError) when calling the DescribeStackResource operation: "
-            "Resource DoomImageStack does not exist for stack fixture"
+            "Resource CapsuleImageStack does not exist for stack fixture"
         ))
         self.assertEqual(absent_resource.returncode, 0, absent_resource.stderr)
         self.assertEqual(absent_resource.stdout.strip(), "absent")

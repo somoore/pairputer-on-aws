@@ -80,15 +80,15 @@ class MicrovmIamScopeTests(unittest.TestCase):
 
         # Relay gets the capsule ARN list (resolved from override or the built image), never "*".
         self.assertIn("CapsuleImageArns: !If", relay_stack)
-        self.assertIn("UseDoomImageOverride", relay_stack)
-        self.assertIn("DoomImageStack.Outputs.CapsuleImageArn", relay_stack)
+        self.assertIn("UseCapsuleImageOverride", relay_stack)
+        self.assertIn("CapsuleImageStack.Outputs.CapsuleImageArn", relay_stack)
 
         # AgentCore gets the registry JSON (id->{arn,name,description}) AND the ARN list AND the default anchor.
         self.assertIn("CapsuleRegistryJson: !If", agentcore_stack)
         self.assertIn('"${I}":{"arn":"${A}","name":"${N}","description":"${D}"}', agentcore_stack)
         self.assertIn("I: !Ref ReferenceCapsuleId", agentcore_stack)
         self.assertIn("CapsuleImageArns: !If", agentcore_stack)
-        self.assertIn("DoomImageArn: !If", agentcore_stack)
+        self.assertIn("CapsuleImageArn: !If", agentcore_stack)
 
     def test_registry_and_iam_are_n_capsule_capable(self):
         # The substrate must accept N capsules by design (ship 1 now). Registry is a JSON MAP the server

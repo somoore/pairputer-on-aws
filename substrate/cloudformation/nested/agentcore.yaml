@@ -13,13 +13,13 @@ Parameters:
       true (Public image mode) => create the runtime via an API-backed custom resource, because the native
       AWS::BedrockAgentCore::Runtime CFN resource's ContainerUri schema rejects public.ecr.aws. false
       (Private mode) => use the native resource with the private-ECR image.
-  DoomImageArn:
+  CapsuleImageArn:
     Type: String
-    Description: The default capsule's MicroVM image ARN (PAIRPUTER_IMAGE_ARN fallback; capsule id 'doom').
+    Description: The default capsule's MicroVM image ARN (PAIRPUTER_IMAGE_ARN fallback).
   CapsuleRegistryJson:
     Type: String
     Description: >
-      JSON map of capsule id -> MicroVM image ARN, e.g. {"doom":"arn:..."}. One MCP server serves every
+      JSON map of capsule id -> MicroVM image ARN, e.g. {"computer-use-desktop":"arn:..."}. One MCP server serves every
       capsule in this map (PAIRPUTER_IMAGE_REGISTRY). Built by the root stack from the deployed capsules.
   CapsuleImageArns:
     Type: CommaDelimitedList
@@ -278,7 +278,7 @@ Resources:
         NetworkMode: PUBLIC
       ProtocolConfiguration: MCP
       EnvironmentVariables:
-        PAIRPUTER_IMAGE_ARN: !Ref DoomImageArn
+        PAIRPUTER_IMAGE_ARN: !Ref CapsuleImageArn
         PAIRPUTER_IMAGE_REGISTRY: !Ref CapsuleRegistryJson
         PAIRPUTER_CAPSULE_MANIFEST: !Ref CapsuleManifestJson
         PAIRPUTER_HOST_CLIENT_MAP: !Sub '{"${CodexClientId}":"codex","${ChatGPTClientId}":"chatgpt","${ClaudeClientId}":"claude","${M2MClientId}":"m2m"}'
@@ -408,7 +408,7 @@ Resources:
       AllowedScopes:
         - !Ref RequiredScope
       EnvironmentVariables:
-        PAIRPUTER_IMAGE_ARN: !Ref DoomImageArn
+        PAIRPUTER_IMAGE_ARN: !Ref CapsuleImageArn
         PAIRPUTER_IMAGE_REGISTRY: !Ref CapsuleRegistryJson
         PAIRPUTER_CAPSULE_MANIFEST: !Ref CapsuleManifestJson
         PAIRPUTER_HOST_CLIENT_MAP: !Sub '{"${CodexClientId}":"codex","${ChatGPTClientId}":"chatgpt","${ClaudeClientId}":"claude","${M2MClientId}":"m2m"}'

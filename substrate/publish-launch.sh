@@ -110,11 +110,11 @@ else
   # Deny with NotPrincipal was considered and REJECTED — that combination is error-prone (AWS warns
   # against NotPrincipal+Deny) and adds no real protection over the implicit deny while risking a
   # policy that locks out CloudFormation itself. Verified below: anonymous/browser/CLI GET -> 403;
-  # CloudFormation create-stack reads the root + nested templateURLs + the DOOM build-context zip.
+  # CloudFormation create-stack reads the root + nested templateURLs + the capsule build-context zip.
   # templates/ + microvm-image/ are CloudFormation-only (the security constraint). third-party/ is a
   # PUBLIC mirror of open-source build deps (FFmpeg etc.) that the MicroVM IMAGE BUILD fetches with a
   # plain curl — it has no aws:CalledVia context, so it MUST be public-read, or the image build fails
-  # "did not stabilize" with no boot logs (exactly the agent-doom/DOOM failure: the Dockerfile FFMPEG_URL
+  # "did not stabilize" with no boot logs (the documented capsule-build failure: the Dockerfile FFMPEG_URL
   # pointed here and got 403/NoSuchBucket). These assets are non-sensitive public tarballs.
   POLICY=$(cat <<EOF
 {
@@ -164,6 +164,13 @@ if ! aws s3 ls "s3://${LAUNCH_BUCKET}/${FFMPEG_KEY}" >/dev/null 2>&1; then
   fi
 fi
 
+# 2c. Publish the brand logo the Cognito invite email embeds (third-party/* is public-read).
+if [[ -f "${SCRIPT_DIR}/../brand/pairputer-logo-dark.png" ]]; then
+  aws s3 cp "${SCRIPT_DIR}/../brand/pairputer-logo-dark.png" \
+    "s3://${LAUNCH_BUCKET}/third-party/brand/pairputer-logo-dark.png" \
+    --content-type image/png --cache-control "public, max-age=86400" --only-show-errors
+fi
+
 # 3. Package: rewrite nested TemplateURLs to absolute URLs in THIS bucket, then upload.
 echo "==> Packaging templates (nested TemplateURLs -> absolute S3 URLs in the launch bucket)..."
 aws cloudformation package \
@@ -177,19 +184,19 @@ echo "==> Uploading packaged root template to s3://${LAUNCH_BUCKET}/${ROOT_KEY}.
 aws s3 cp "${PACKAGED}" "s3://${LAUNCH_BUCKET}/${ROOT_KEY}" --region "${AWS_REGION}" >/dev/null
 
 # 4. Publish the bundled capsule's build context zip under pairputer/microvm-image/ so the public 1-click
-# bundled-image build (BundleReferenceCapsule=true + ImageSource=Public) can fetch it. package-doom-image.sh
+# bundled-image build (BundleReferenceCapsule=true + ImageSource=Public) can fetch it. package-capsule-image.sh
 # uploads it to <bucket>/<prefix>/pairputer-<capsule>-context-<treehash>.zip and prints that s3:// URI. The
 # reference capsule defaults to computer-use-desktop, the Pairputer Workbench (PAIRPUTER_REFERENCE_CAPSULE).
 # Skip with PAIRPUTER_SKIP_CONTEXT=1.
 if [[ "${PAIRPUTER_SKIP_CONTEXT:-0}" != "1" ]]; then
   echo "==> Publishing bundled capsule (${PAIRPUTER_REFERENCE_CAPSULE:-computer-use-desktop}) build context to s3://${LAUNCH_BUCKET}/pairputer/microvm-image/..."
-  CONTEXT_URI="$("${SCRIPT_DIR}/package-doom-image.sh" "${LAUNCH_BUCKET}" "pairputer/microvm-image" | tail -n1)"
+  CONTEXT_URI="$("${SCRIPT_DIR}/package-capsule-image.sh" "${LAUNCH_BUCKET}" "pairputer/microvm-image" | tail -n1)"
   if [[ "${CONTEXT_URI}" != s3://* ]]; then
-    echo "ERROR: package-doom-image.sh did not return an s3:// context URI (got: ${CONTEXT_URI})." >&2
+    echo "ERROR: package-capsule-image.sh did not return an s3:// context URI (got: ${CONTEXT_URI})." >&2
     exit 1
   fi
   echo "    context: ${CONTEXT_URI}"
-  echo "    (set DoomCodeArtifactUri=${CONTEXT_URI} + DoomCodeArtifactBucket=${LAUNCH_BUCKET} in pairputer.yaml defaults if this is a new hash)"
+  echo "    (set CapsuleCodeArtifactUri=${CONTEXT_URI} + CapsuleCodeArtifactBucket=${LAUNCH_BUCKET} in pairputer.yaml defaults if this is a new hash)"
 fi
 
 # Virtual-hosted-style URL (works for path-style regions too).

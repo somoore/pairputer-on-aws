@@ -114,17 +114,17 @@ class BundleReferenceCapsuleTests(unittest.TestCase):
         # A running/suspended MicroVM pins the image and blocks DeleteMicrovmImage. A custom resource must
         # terminate MicroVMs on stack DELETE, BEFORE the image is deleted (DependsOn the image => reverse
         # order on delete). This is the foolproof, tooling-free fix for 1-click users.
-        mv = read_text("substrate/cloudformation/nested/microvm-image.yaml")
+        mv = read_text("capsules/nested/capsule-stack.yaml")
         self.assertIn("MicrovmReaper:", mv)
         self.assertIn("Type: Custom::PairputerMicrovmReaper", mv)
-        self.assertIn("DependsOn: DoomMicrovmImage", mv)  # runs before the image delete
+        self.assertIn("DependsOn: CapsuleMicrovmImage", mv)  # runs before the image delete
         self.assertIn("lambda:TerminateMicrovm", mv)
         self.assertIn("lambda:ListMicrovms", mv)
         # Delete-only, and must never block teardown (best-effort SUCCESS on error).
         self.assertIn('event["RequestType"] != "Delete"', mv)
         self.assertIn("reaper best-effort", mv)
         # IAM scoped to the image ARN, not "*".
-        self.assertIn("microvm-image:${DoomImageName}", mv)
+        self.assertIn("microvm-image:${CapsuleImageName}", mv)
 
     def test_server_tolerates_empty_registry(self):
         # server.py must not require PAIRPUTER_IMAGE_ARN, and must report "no capsules" cleanly.

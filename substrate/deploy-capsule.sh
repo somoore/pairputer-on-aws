@@ -119,7 +119,7 @@ create_bucket_if_missing() {
 create_bucket_if_missing "${ARTIFACT_BUCKET}"
 echo "==> Packaging capsule context..."
 CONTEXT_URI="$(PAIRPUTER_MICROVM_CONTEXT_DIR="${CAPSULE_DIR}" \
-  "${SCRIPT_DIR}/package-doom-image.sh" "${ARTIFACT_BUCKET}" "capsules/${CAPSULE_ID}" | tail -n1)"
+  "${SCRIPT_DIR}/package-capsule-image.sh" "${ARTIFACT_BUCKET}" "capsules/${CAPSULE_ID}" | tail -n1)"
 [[ -n "${CONTEXT_URI}" ]] || { echo "ERROR: packaging failed" >&2; exit 1; }
 echo "    context: ${CONTEXT_URI}"
 

@@ -15,10 +15,10 @@ if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 #   ./deploy.sh [CONTAINER_URI] [RELAY_CONTAINER_URI]
 #
 # This script packages the WAD-free MicroVM build context, uploads it to S3,
-# and CloudFormation creates the DOOM MicroVM image inside the target
+# and CloudFormation creates the bundled capsule MicroVM image inside the target
 # account/region. Supplying a prebuilt external MicroVM image is intentionally
-# gated behind PAIRPUTER_ALLOW_EXTERNAL_DOOM_IMAGE=true because it bypasses the
-# stack-managed DoomImageStack and can point AgentCore at an image with no
+# gated behind PAIRPUTER_ALLOW_EXTERNAL_CAPSULE_IMAGE=true because it bypasses the
+# stack-managed CapsuleImageStack and can point AgentCore at an image with no
 # active version.
 
 set -euo pipefail
@@ -37,29 +37,29 @@ PACKAGED_TEMPLATE="${PAIRPUTER_PACKAGED_TEMPLATE:-/tmp/${STACK_NAME}-${AWS_REGIO
 
 CONTAINER_URI="${1:-${PAIRPUTER_CONTAINER_URI:-}}"
 RELAY_CONTAINER_URI="${2:-${PAIRPUTER_RELAY_CONTAINER_URI:-}}"
-DOOM_IMAGE_ARN_OVERRIDE="${3:-${PAIRPUTER_DOOM_IMAGE_ARN_OVERRIDE:-${PAIRPUTER_DOOM_IMAGE_ARN:-}}}"
-ALLOW_EXTERNAL_DOOM_IMAGE="${PAIRPUTER_ALLOW_EXTERNAL_DOOM_IMAGE:-false}"
+CAPSULE_IMAGE_ARN_OVERRIDE="${3:-${PAIRPUTER_CAPSULE_IMAGE_ARN_OVERRIDE:-${PAIRPUTER_CAPSULE_IMAGE_ARN:-}}}"
+ALLOW_EXTERNAL_CAPSULE_IMAGE="${PAIRPUTER_ALLOW_EXTERNAL_CAPSULE_IMAGE:-false}"
 
-if [[ "${ALLOW_EXTERNAL_DOOM_IMAGE}" != "true" && "${ALLOW_EXTERNAL_DOOM_IMAGE}" != "false" ]]; then
-  echo "ERROR: PAIRPUTER_ALLOW_EXTERNAL_DOOM_IMAGE must be true or false." >&2
+if [[ "${ALLOW_EXTERNAL_CAPSULE_IMAGE}" != "true" && "${ALLOW_EXTERNAL_CAPSULE_IMAGE}" != "false" ]]; then
+  echo "ERROR: PAIRPUTER_ALLOW_EXTERNAL_CAPSULE_IMAGE must be true or false." >&2
   exit 1
 fi
 
 if [[ "${RELAY_CONTAINER_URI}" == arn:aws:lambda:*:microvm-image:* ]]; then
-  if [[ "${ALLOW_EXTERNAL_DOOM_IMAGE}" != "true" ]]; then
+  if [[ "${ALLOW_EXTERNAL_CAPSULE_IMAGE}" != "true" ]]; then
     echo "ERROR: second argument looks like a MicroVM image ARN, not the relay container URI." >&2
-    echo "       Normal deploys must let CloudFormation build DoomImageStack." >&2
-    echo "       To use an external image deliberately, set PAIRPUTER_ALLOW_EXTERNAL_DOOM_IMAGE=true." >&2
+    echo "       Normal deploys must let CloudFormation build CapsuleImageStack." >&2
+    echo "       To use an external image deliberately, set PAIRPUTER_ALLOW_EXTERNAL_CAPSULE_IMAGE=true." >&2
     exit 1
   fi
-  DOOM_IMAGE_ARN_OVERRIDE="${RELAY_CONTAINER_URI}"
+  CAPSULE_IMAGE_ARN_OVERRIDE="${RELAY_CONTAINER_URI}"
   RELAY_CONTAINER_URI=""
 fi
 
-if [[ -n "${DOOM_IMAGE_ARN_OVERRIDE}" && "${ALLOW_EXTERNAL_DOOM_IMAGE}" != "true" ]]; then
-  echo "ERROR: DoomImageArnOverride is set but external MicroVM images are not enabled." >&2
-  echo "       Omit the third deploy argument and unset PAIRPUTER_DOOM_IMAGE_ARN_OVERRIDE/PAIRPUTER_DOOM_IMAGE_ARN." >&2
-  echo "       If this is intentional, rerun with PAIRPUTER_ALLOW_EXTERNAL_DOOM_IMAGE=true." >&2
+if [[ -n "${CAPSULE_IMAGE_ARN_OVERRIDE}" && "${ALLOW_EXTERNAL_CAPSULE_IMAGE}" != "true" ]]; then
+  echo "ERROR: CapsuleImageArnOverride is set but external MicroVM images are not enabled." >&2
+  echo "       Omit the third deploy argument and unset PAIRPUTER_CAPSULE_IMAGE_ARN_OVERRIDE/PAIRPUTER_CAPSULE_IMAGE_ARN." >&2
+  echo "       If this is intentional, rerun with PAIRPUTER_ALLOW_EXTERNAL_CAPSULE_IMAGE=true." >&2
   exit 1
 fi
 
@@ -117,7 +117,7 @@ run_capture_last() {
 # private ECR (needs a working local Docker). PAIRPUTER_IMAGE_SOURCE=Public deploys the SIGNED public
 # ECR images the template already pins (ContainerUri/RelayContainerUri defaults) — NO local Docker
 # build. Public mode is the same images the 1-click console path uses; use it for a Docker-less deploy
-# or to smoke-test the shipping path. (The DOOM MicroVM context is still packaged locally via zip/s3 —
+# or to smoke-test the shipping path. (The capsule MicroVM context is still packaged locally via zip/s3 —
 # that step needs no Docker.)
 IMAGE_SOURCE="${PAIRPUTER_IMAGE_SOURCE:-Private}"
 if [[ "${IMAGE_SOURCE}" != "Private" && "${IMAGE_SOURCE}" != "Public" ]]; then
@@ -177,7 +177,7 @@ if [[ "${INPUT_SELFTEST_ENFORCE}" != "true" && "${INPUT_SELFTEST_ENFORCE}" != "f
 fi
 # Bundle a reference capsule into the root stack? Default true (batteries-included). Set false to deploy a
 # BARE substrate — capsules then arrive as cartridges via deploy-capsule.sh (docs/capsule-architecture.md).
-# When false we skip the DOOM image build/reuse/override AND the manifest entirely (the cartridge owns both).
+# When false we skip the capsule image build/reuse/override AND the manifest entirely (the cartridge owns both).
 BUNDLE_REFERENCE_CAPSULE="${PAIRPUTER_BUNDLE_REFERENCE_CAPSULE:-true}"
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" != "true" && "${BUNDLE_REFERENCE_CAPSULE}" != "false" ]]; then
   echo "ERROR: PAIRPUTER_BUNDLE_REFERENCE_CAPSULE must be true or false." >&2; exit 1
@@ -185,21 +185,21 @@ fi
 # The built-in cartridge dir under capsules/. Default: computer-use-desktop (the Pairputer Workbench —
 # the flagship shared dev desktop). Agent DOOM remains available as a separate cartridge
 # (deploy-capsule.sh agent-doom) or as the bundled capsule via PAIRPUTER_REFERENCE_CAPSULE=agent-doom.
-# One source of truth: exported so package-doom-image.sh packages the SAME dir this script reads the
-# manifest from — a mismatch is what shipped a toolless Hellbox while the chat said "Agent DOOM".
+# One source of truth: exported so package-capsule-image.sh packages the SAME dir this script reads the
+# manifest from — a mismatch once shipped a toolless capsule while the chat promised agent tools.
 REFERENCE_CAPSULE="${PAIRPUTER_REFERENCE_CAPSULE:-computer-use-desktop}"
 CAPSULE_CONTEXT_DIR="${PAIRPUTER_MICROVM_CONTEXT_DIR:-${SCRIPT_DIR}/../capsules/${REFERENCE_CAPSULE}}"
-export PAIRPUTER_MICROVM_CONTEXT_DIR="${CAPSULE_CONTEXT_DIR}"  # package-doom-image.sh reads this
+export PAIRPUTER_MICROVM_CONTEXT_DIR="${CAPSULE_CONTEXT_DIR}"  # package-capsule-image.sh reads this
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" == "true" && ! -f "${CAPSULE_CONTEXT_DIR}/Dockerfile" ]]; then
   echo "ERROR: reference capsule '${REFERENCE_CAPSULE}' has no Dockerfile at ${CAPSULE_CONTEXT_DIR}." >&2; exit 1
 fi
-DOOM_IMAGE_NAME="${PAIRPUTER_DOOM_IMAGE_NAME:-${STACK_NAME}-doom}"
-DOOM_BASE_IMAGE_ARN="${PAIRPUTER_DOOM_BASE_IMAGE_ARN:-}"
-DOOM_BASE_IMAGE_VERSION="${PAIRPUTER_DOOM_BASE_IMAGE_VERSION:-0}"
-DOOM_IMAGE_MINIMUM_MEMORY_MIB="${PAIRPUTER_DOOM_IMAGE_MINIMUM_MEMORY_MIB:-2048}"
+CAPSULE_IMAGE_NAME="${PAIRPUTER_CAPSULE_IMAGE_NAME:-${STACK_NAME}-workbench}"
+CAPSULE_BASE_IMAGE_ARN="${PAIRPUTER_CAPSULE_BASE_IMAGE_ARN:-}"
+CAPSULE_BASE_IMAGE_VERSION="${PAIRPUTER_CAPSULE_BASE_IMAGE_VERSION:-0}"
+CAPSULE_IMAGE_MINIMUM_MEMORY_MIB="${PAIRPUTER_CAPSULE_IMAGE_MINIMUM_MEMORY_MIB:-2048}"
 
-if [[ "${DOOM_IMAGE_NAME}" =~ [^a-zA-Z0-9_-] || "${#DOOM_IMAGE_NAME}" -gt 64 ]]; then
-  echo "ERROR: PAIRPUTER_DOOM_IMAGE_NAME must match ^[a-zA-Z0-9-_]{1,64}$." >&2
+if [[ "${CAPSULE_IMAGE_NAME}" =~ [^a-zA-Z0-9_-] || "${#CAPSULE_IMAGE_NAME}" -gt 64 ]]; then
+  echo "ERROR: PAIRPUTER_CAPSULE_IMAGE_NAME must match ^[a-zA-Z0-9-_]{1,64}$." >&2
   exit 1
 fi
 
@@ -278,26 +278,26 @@ echo "==> Ensuring CloudFormation artifact bucket ${ARTIFACT_BUCKET} exists in $
 create_bucket_if_missing "${ARTIFACT_BUCKET}"
 
 # Adopt an existing in-account image with our name instead of trying to create a duplicate.
-# AWS::Lambda::MicrovmImage names are account-unique, so if a prior image named ${DOOM_IMAGE_NAME}
+# AWS::Lambda::MicrovmImage names are account-unique, so if a prior image named ${CAPSULE_IMAGE_NAME}
 # already exists (e.g. remove-cf.sh had to RETAIN it because a leftover MicroVM blocked the delete),
 # a fresh deploy that tries to CREATE it fails with "already exists". Detect it (tagging API — no
 # MicroVM-specific CLI service needed) and reuse it via the override path. Opt out with
-# PAIRPUTER_FORCE_REBUILD_DOOM_IMAGE=true.
+# PAIRPUTER_FORCE_REBUILD_CAPSULE_IMAGE=true.
 #
 # BUT only adopt an image that is actually USABLE — a name can linger in the tagging API while the
 # image is DELETING or FAILED, and adopting that would fail the deploy just as badly. We confirm the
 # state with the JS SDK (present after a relay build). If the SDK is unavailable we adopt on the
-# tagging-API signal alone; the template's DoomImageOverrideValidation custom resource is the backstop.
-detect_doom_stack_ownership() {
+# tagging-API signal alone; the template's CapsuleImageOverrideValidation custom resource is the backstop.
+detect_capsule_stack_ownership() {
   local stack_name="$1" region="$2" error_file physical_id error_text rc
   error_file="$(mktemp "${TMPDIR:-/tmp}/pairputer-cfn-lookup.XXXXXX")"
   if physical_id="$(aws cloudformation describe-stack-resource \
-      --stack-name "${stack_name}" --logical-resource-id DoomImageStack \
+      --stack-name "${stack_name}" --logical-resource-id CapsuleImageStack \
       --region "${region}" --query 'StackResourceDetail.PhysicalResourceId' --output text \
       2>"${error_file}")"; then
     rm -f "${error_file}"
     if [[ -z "${physical_id}" || "${physical_id}" == "None" ]]; then
-      echo "ERROR: CloudFormation returned no physical ID for DoomImageStack; refusing to infer ownership." >&2
+      echo "ERROR: CloudFormation returned no physical ID for CapsuleImageStack; refusing to infer ownership." >&2
       return 1
     fi
     printf '%s\n' "managed"
@@ -326,39 +326,39 @@ detect_doom_stack_ownership() {
       return 0
     fi
   fi
-  echo "ERROR: unable to determine whether ${stack_name} owns DoomImageStack; refusing to continue." >&2
+  echo "ERROR: unable to determine whether ${stack_name} owns CapsuleImageStack; refusing to continue." >&2
   [[ -n "${error_text}" ]] && echo "${error_text}" >&2
   return "${rc}"
 }
 
-STACK_MANAGES_DOOM_IMAGE="false"
+STACK_MANAGES_CAPSULE_IMAGE="false"
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" == "true" ]]; then
-  DOOM_STACK_OWNERSHIP="$(detect_doom_stack_ownership "${STACK_NAME}" "${AWS_REGION}")" || exit $?
-  if [[ "${DOOM_STACK_OWNERSHIP}" == "managed" ]]; then
-    STACK_MANAGES_DOOM_IMAGE="true"
-  elif [[ "${DOOM_STACK_OWNERSHIP}" != "absent" ]]; then
-    echo "ERROR: unexpected DoomImageStack ownership result '${DOOM_STACK_OWNERSHIP}'." >&2
+  CAPSULE_STACK_OWNERSHIP="$(detect_capsule_stack_ownership "${STACK_NAME}" "${AWS_REGION}")" || exit $?
+  if [[ "${CAPSULE_STACK_OWNERSHIP}" == "managed" ]]; then
+    STACK_MANAGES_CAPSULE_IMAGE="true"
+  elif [[ "${CAPSULE_STACK_OWNERSHIP}" != "absent" ]]; then
+    echo "ERROR: unexpected CapsuleImageStack ownership result '${CAPSULE_STACK_OWNERSHIP}'." >&2
     exit 1
   fi
 fi
 
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" != "true" ]]; then
-  echo "==> Bare substrate (BundleReferenceCapsule=false): skipping DOOM image build/reuse/override."
-elif [[ "${STACK_MANAGES_DOOM_IMAGE}" == "true" ]]; then
+  echo "==> Bare substrate (BundleReferenceCapsule=false): skipping capsule image build/reuse/override."
+elif [[ "${STACK_MANAGES_CAPSULE_IMAGE}" == "true" ]]; then
   # Preserve root-stack ownership across redeploys. Treating this managed image as an external
-  # override would delete DoomImageStack now and force an unnecessary full rebuild next time.
-  echo "==> Existing stack-managed DOOM image detected; preserving DoomImageStack ownership."
-elif [[ -z "${DOOM_IMAGE_ARN_OVERRIDE}" && "${PAIRPUTER_FORCE_REBUILD_DOOM_IMAGE:-false}" != "true" ]]; then
-  EXISTING_DOOM_IMAGE_ARN="$(aws resourcegroupstaggingapi get-resources \
+  # override would delete CapsuleImageStack now and force an unnecessary full rebuild next time.
+  echo "==> Existing stack-managed capsule image detected; preserving CapsuleImageStack ownership."
+elif [[ -z "${CAPSULE_IMAGE_ARN_OVERRIDE}" && "${PAIRPUTER_FORCE_REBUILD_CAPSULE_IMAGE:-false}" != "true" ]]; then
+  EXISTING_CAPSULE_IMAGE_ARN="$(aws resourcegroupstaggingapi get-resources \
     --region "${AWS_REGION}" --resource-type-filters lambda \
-    --query "ResourceTagMappingList[?ends_with(ResourceARN, ':microvm-image:${DOOM_IMAGE_NAME}')].ResourceARN | [0]" \
+    --query "ResourceTagMappingList[?ends_with(ResourceARN, ':microvm-image:${CAPSULE_IMAGE_NAME}')].ResourceARN | [0]" \
     --output text 2>/dev/null || true)"
-  if [[ -n "${EXISTING_DOOM_IMAGE_ARN}" && "${EXISTING_DOOM_IMAGE_ARN}" != "None" ]]; then
+  if [[ -n "${EXISTING_CAPSULE_IMAGE_ARN}" && "${EXISTING_CAPSULE_IMAGE_ARN}" != "None" ]]; then
     MVM_SDK="${SCRIPT_DIR}/stateful-relay/node_modules/@aws-sdk/client-lambda-microvms"
     IMAGE_USABLE="unknown"
     if command -v node >/dev/null 2>&1 && [[ -d "${MVM_SDK}" ]]; then
       # Prints "USABLE", "UNUSABLE:<state>", or "GONE"; usable = has an active version and isn't deleting.
-      IMAGE_USABLE="$(AWS_REGION="${AWS_REGION}" HB_ARN="${EXISTING_DOOM_IMAGE_ARN}" HB_SDK="${MVM_SDK}" node -e '
+      IMAGE_USABLE="$(AWS_REGION="${AWS_REGION}" HB_ARN="${EXISTING_CAPSULE_IMAGE_ARN}" HB_SDK="${MVM_SDK}" node -e '
         const m=require(process.env.HB_SDK);
         const c=new m.LambdaMicrovmsClient({region:process.env.AWS_REGION});
         c.send(new m.GetMicrovmImageCommand({imageIdentifier:process.env.HB_ARN}))
@@ -369,30 +369,30 @@ elif [[ -z "${DOOM_IMAGE_ARN_OVERRIDE}" && "${PAIRPUTER_FORCE_REBUILD_DOOM_IMAGE
       ' 2>/dev/null || echo "unknown")"
     fi
     if [[ "${IMAGE_USABLE}" == USABLE || "${IMAGE_USABLE}" == unknown ]]; then
-      echo "==> Found existing MicroVM image '${DOOM_IMAGE_NAME}'; reusing it instead of rebuilding."
-      echo "    ${EXISTING_DOOM_IMAGE_ARN}$( [[ "${IMAGE_USABLE}" == unknown ]] && echo '  (state unverified — no local SDK; validator will confirm)')"
-      echo "    (set PAIRPUTER_FORCE_REBUILD_DOOM_IMAGE=true to build fresh instead)"
-      DOOM_IMAGE_ARN_OVERRIDE="${EXISTING_DOOM_IMAGE_ARN}"
-      ALLOW_EXTERNAL_DOOM_IMAGE="true"   # our OWN account's image, adopted deliberately
+      echo "==> Found existing MicroVM image '${CAPSULE_IMAGE_NAME}'; reusing it instead of rebuilding."
+      echo "    ${EXISTING_CAPSULE_IMAGE_ARN}$( [[ "${IMAGE_USABLE}" == unknown ]] && echo '  (state unverified — no local SDK; validator will confirm)')"
+      echo "    (set PAIRPUTER_FORCE_REBUILD_CAPSULE_IMAGE=true to build fresh instead)"
+      CAPSULE_IMAGE_ARN_OVERRIDE="${EXISTING_CAPSULE_IMAGE_ARN}"
+      ALLOW_EXTERNAL_CAPSULE_IMAGE="true"   # our OWN account's image, adopted deliberately
     else
-      echo "==> Existing image '${DOOM_IMAGE_NAME}' is not usable (${IMAGE_USABLE}); building a fresh one." >&2
+      echo "==> Existing image '${CAPSULE_IMAGE_NAME}' is not usable (${IMAGE_USABLE}); building a fresh one." >&2
     fi
   fi
 fi
 
-DOOM_CODE_ARTIFACT_URI=""
-DOOM_CODE_ARTIFACT_BUCKET=""
+CAPSULE_CODE_ARTIFACT_URI=""
+CAPSULE_CODE_ARTIFACT_BUCKET=""
 if [[ "${BUNDLE_REFERENCE_CAPSULE}" != "true" ]]; then
   :  # bare substrate: no context to package (the cartridge builds its own image)
-elif [[ -z "${DOOM_IMAGE_ARN_OVERRIDE}" ]]; then
-  echo "==> Packaging WAD-free DOOM MicroVM context..."
-  if ! DOOM_CODE_ARTIFACT_URI="$(run_capture_last "${SCRIPT_DIR}/package-doom-image.sh" "${ARTIFACT_BUCKET}" "${STACK_NAME}/microvm-image")" || [[ -z "${DOOM_CODE_ARTIFACT_URI}" ]]; then
-    echo "ERROR: package-doom-image.sh failed. Aborting deploy." >&2
+elif [[ -z "${CAPSULE_IMAGE_ARN_OVERRIDE}" ]]; then
+  echo "==> Packaging capsule MicroVM context..."
+  if ! CAPSULE_CODE_ARTIFACT_URI="$(run_capture_last "${SCRIPT_DIR}/package-capsule-image.sh" "${ARTIFACT_BUCKET}" "${STACK_NAME}/microvm-image")" || [[ -z "${CAPSULE_CODE_ARTIFACT_URI}" ]]; then
+    echo "ERROR: package-capsule-image.sh failed. Aborting deploy." >&2
     exit 1
   fi
-  DOOM_CODE_ARTIFACT_BUCKET="${ARTIFACT_BUCKET}"
+  CAPSULE_CODE_ARTIFACT_BUCKET="${ARTIFACT_BUCKET}"
 else
-  echo "==> Using prebuilt DOOM image override; skipping MicroVM image packaging."
+  echo "==> Using prebuilt capsule image override; skipping MicroVM image packaging."
 fi
 
 echo "==> Packaging nested CloudFormation templates..."
@@ -408,10 +408,10 @@ echo "==> Region:           ${AWS_REGION}"
 echo "==> Template:         ${PACKAGED_TEMPLATE}"
 echo "==> ContainerUri:     ${CONTAINER_URI}"
 echo "==> RelayUri:         ${RELAY_CONTAINER_URI}"
-echo "==> DoomImageOverride:${DOOM_IMAGE_ARN_OVERRIDE:-<none>}"
-echo "==> DoomContextUri:   ${DOOM_CODE_ARTIFACT_URI:-<not needed>}"
-echo "==> DoomImageName:    ${DOOM_IMAGE_NAME}"
-echo "==> DoomBaseVersion:  ${DOOM_BASE_IMAGE_VERSION}"
+echo "==> CapsuleImageOverride: ${CAPSULE_IMAGE_ARN_OVERRIDE:-<none>}"
+echo "==> CapsuleContextUri:   ${CAPSULE_CODE_ARTIFACT_URI:-<not needed>}"
+echo "==> CapsuleImageName:    ${CAPSULE_IMAGE_NAME}"
+echo "==> CapsuleBaseVersion:  ${CAPSULE_BASE_IMAGE_VERSION}"
 echo "==> RuntimeName:      ${RUNTIME_NAME}"
 echo "==> NetworkingMode:   ${NETWORKING_MODE}"
 if [[ "${NETWORKING_MODE}" == "ExistingVpc" ]]; then
@@ -446,14 +446,14 @@ PARAMETER_OVERRIDES=(
   "BundleReferenceCapsule=${BUNDLE_REFERENCE_CAPSULE}"
   "PrivateMcpContainerUri=${CONTAINER_URI}"
   "PrivateRelayContainerUri=${RELAY_CONTAINER_URI}"
-  "DoomImageArnOverride=${DOOM_IMAGE_ARN_OVERRIDE}"
-  "AllowDoomImageArnOverride=${ALLOW_EXTERNAL_DOOM_IMAGE}"
-  "DoomCodeArtifactUri=${DOOM_CODE_ARTIFACT_URI}"
-  "DoomCodeArtifactBucket=${DOOM_CODE_ARTIFACT_BUCKET}"
-  "DoomImageName=${DOOM_IMAGE_NAME}"
-  "DoomBaseImageArn=${DOOM_BASE_IMAGE_ARN}"
-  "DoomBaseImageVersion=${DOOM_BASE_IMAGE_VERSION}"
-  "DoomImageMinimumMemoryMiB=${DOOM_IMAGE_MINIMUM_MEMORY_MIB}"
+  "CapsuleImageArnOverride=${CAPSULE_IMAGE_ARN_OVERRIDE}"
+  "AllowCapsuleImageArnOverride=${ALLOW_EXTERNAL_CAPSULE_IMAGE}"
+  "CapsuleCodeArtifactUri=${CAPSULE_CODE_ARTIFACT_URI}"
+  "CapsuleCodeArtifactBucket=${CAPSULE_CODE_ARTIFACT_BUCKET}"
+  "CapsuleImageName=${CAPSULE_IMAGE_NAME}"
+  "CapsuleBaseImageArn=${CAPSULE_BASE_IMAGE_ARN}"
+  "CapsuleBaseImageVersion=${CAPSULE_BASE_IMAGE_VERSION}"
+  "CapsuleImageMinimumMemoryMiB=${CAPSULE_IMAGE_MINIMUM_MEMORY_MIB}"
   "RuntimeName=${RUNTIME_NAME}"
   "CodexCallbackUrl=${CODEX_CALLBACK_URL}"
   "SuperAdminEmail=${SUPER_ADMIN_EMAIL}"
@@ -581,7 +581,7 @@ stack ended in ${CURRENT_STATE} after re-waiting"
   events_have_flake() {  # $1 = stack name/arn; 0 if events mention the image flake
     aws cloudformation describe-stack-events --stack-name "$1" --region "${AWS_REGION}" \
       --query 'StackEvents[].[ResourceStatusReason,LogicalResourceId]' --output text 2>/dev/null \
-      | grep -qiE "did not stabilize|Microvm|DoomImage"
+      | grep -qiE "did not stabilize|Microvm|CapsuleImage"
   }
   IMAGE_FLAKE="false"
   if echo "${DEPLOY_OUTPUT}" | grep -qiE "did not stabilize|MicrovmImage"; then
@@ -589,14 +589,14 @@ stack ended in ${CURRENT_STATE} after re-waiting"
   elif events_have_flake "${STACK_NAME}"; then
     IMAGE_FLAKE="true"
   else
-    # CRITICAL: the "did not stabilize" reason lives in the NESTED DoomImageStack's events, not the
+    # CRITICAL: the "did not stabilize" reason lives in the NESTED CapsuleImageStack's events, not the
     # ROOT stack's (the root only shows the generic "Embedded stack ... was not successfully
-    # created"). So also scan the DoomImageStack nested stack directly — without this, the retry
+    # created"). So also scan the CapsuleImageStack nested stack directly — without this, the retry
     # never fires for a nested-stack MicroVM flake and a transient failure aborts the whole deploy.
-    DOOM_NESTED_ARN="$(aws cloudformation describe-stack-resource \
-      --stack-name "${STACK_NAME}" --logical-resource-id DoomImageStack --region "${AWS_REGION}" \
+    CAPSULE_NESTED_ARN="$(aws cloudformation describe-stack-resource \
+      --stack-name "${STACK_NAME}" --logical-resource-id CapsuleImageStack --region "${AWS_REGION}" \
       --query 'StackResourceDetail.PhysicalResourceId' --output text 2>/dev/null || true)"
-    if [[ -n "${DOOM_NESTED_ARN}" && "${DOOM_NESTED_ARN}" != "None" ]] && events_have_flake "${DOOM_NESTED_ARN}"; then
+    if [[ -n "${CAPSULE_NESTED_ARN}" && "${CAPSULE_NESTED_ARN}" != "None" ]] && events_have_flake "${CAPSULE_NESTED_ARN}"; then
       IMAGE_FLAKE="true"
     fi
   fi

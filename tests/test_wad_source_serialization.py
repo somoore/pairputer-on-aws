@@ -32,7 +32,7 @@ class WadSourceSerializationTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [str(REPO_ROOT / "substrate/package-doom-image.sh")],
+                [str(REPO_ROOT / "substrate/package-capsule-image.sh")],
                 env=env,
                 check=True,
                 capture_output=True,
