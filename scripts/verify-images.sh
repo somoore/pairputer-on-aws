@@ -29,16 +29,25 @@ ID_REGEXP="${PAIRPUTER_SIGNER_IDENTITY_REGEXP:-^https://github.com/somoore/pairp
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRUSTED_ROOT="${PAIRPUTER_TRUSTED_ROOT:-${HERE}/sigstore-trusted-root.json}"
 
-# --- The digests the template pins today. Keep in sync with substrate/cloudformation/pairputer.yaml. ------
-DEFAULT_IMAGES=(
-  "public.ecr.aws/b6x6x7v3/pairputer-mcp@sha256:665fcdbcdc245f18c68be220cf216440ab1772eb2a8aee3be5036238a44f5193"
-  "public.ecr.aws/b6x6x7v3/pairputer-stateful-relay@sha256:7340635637cb1aa4644a90da4644986d708260752fa363522321f33710b69176"
-)
+# --- Default: verify the EXACT digests the CloudFormation template pins, read from the template itself
+# so this script can never drift from what a deploy actually uses. (A previous hardcoded list here went
+# stale after a digest bump — it "verified" images the template no longer deployed.)
+TEMPLATE="${PAIRPUTER_TEMPLATE:-${HERE}/../substrate/cloudformation/pairputer.yaml}"
+DEFAULT_IMAGES=()
+if [[ -f "$TEMPLATE" ]]; then
+  while IFS= read -r img; do DEFAULT_IMAGES+=("$img"); done < <(
+    grep -oE 'public\.ecr\.aws/[a-z0-9/._-]+@sha256:[0-9a-f]{64}' "$TEMPLATE" | sort -u)
+fi
 
 command -v cosign >/dev/null || { echo "ERROR: cosign not found. See https://docs.sigstore.dev/cosign/installation"; exit 2; }
 [[ -f "$TRUSTED_ROOT" ]] || { echo "ERROR: pinned Sigstore root not found: $TRUSTED_ROOT"; exit 2; }
 
-IMAGES=("$@"); [[ ${#IMAGES[@]} -eq 0 ]] && IMAGES=("${DEFAULT_IMAGES[@]}")
+IMAGES=("$@")
+if [[ ${#IMAGES[@]} -eq 0 ]]; then
+  [[ ${#DEFAULT_IMAGES[@]} -gt 0 ]] || { echo "ERROR: no digests given and template not found at $TEMPLATE (set PAIRPUTER_TEMPLATE or pass IMG@sha256:... args)"; exit 2; }
+  echo "Verifying the digests pinned by: $TEMPLATE"
+  IMAGES=("${DEFAULT_IMAGES[@]}")
+fi
 
 fail=0
 for img in "${IMAGES[@]}"; do
