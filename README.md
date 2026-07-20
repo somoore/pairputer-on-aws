@@ -27,7 +27,10 @@ The bundled reference capsule is the **Pairputer Workbench** — a disposable, r
 
 ## Deploy it
 
-Two paths. Both land in your account, `us-east-1`.
+Two paths. Both land in your account. **`us-east-1` is the tested & recommended region.** The template
+isn't hard-locked to it, but other regions are unverified and on-your-own: the CloudFront-scope WAF only
+exists in `us-east-1` (deploy elsewhere and it's skipped unless you pass your own `WebAclArn`), and
+Bedrock AgentCore + Lambda MicroVM availability varies by region.
 
 ### 🚀 1-click — CloudFormation (fastest)
 
