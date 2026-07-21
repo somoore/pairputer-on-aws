@@ -67,21 +67,6 @@ Cartridge capsule stacks (`pairputer-capsule-*`) are deleted first automatically
 terminates leftover MicroVMs and deletes its image, then the root stack tears down every nested stack
 in dependency order. Nothing is left running, so the bill stops.
 
-## Developing pairputer
-
-The 1-click above is the way to *use* pairputer. To *hack on it* (change the MCP server, the relay, or the
-Workbench and deploy your build from source), clone the repo and run the from-source deploy - it builds
-the MCP + relay images locally, pushes them to your private ECR, and deploys the same stack:
-
-```bash
-git clone https://github.com/somoore/pairputer-on-aws && cd pairputer-on-aws
-substrate/deploy.sh   # needs a running Docker daemon; builds from source into your account
-```
-
-This is a **contributor tool, not a second way to deploy** - it stands up the same stack as the 1-click,
-only the images come from your source build. See [`substrate/README.md`](./substrate/README.md) and
-[`docs/local-dev-loop.md`](./docs/local-dev-loop.md) for the inner loop, image modes, and options.
-
 ## Learn more
 
 - [`docs/architecture.md`](./docs/architecture.md): how the pieces fit (diagram)

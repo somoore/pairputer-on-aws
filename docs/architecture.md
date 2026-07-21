@@ -95,8 +95,8 @@ capsule uses) and `image-copy` (private-mode verify-and-copy) when applicable.
 
 **In-stack self-healing custom resources** (so the 1-click console path works with zero external tooling):
 
-- **fck-nat AMI resolver** (`CreateVpcFckNat` only) - resolves the current fck-nat ARM64 AMI, since the
-  console can't run `deploy.sh` to look it up.
+- **fck-nat AMI resolver** (`CreateVpcFckNat` only) - resolves the current fck-nat ARM64 AMI at deploy
+  time, so the console 1-click needs no local tooling to look it up.
 - **ALB↔CloudFront-origin SG wiring** (`relay`) - CloudFront VPC-origin traffic arrives from an AWS-created
   `CloudFront-VPCOrigins-Service-SG` (not the VPC CIDR), so a custom resource opens the internal ALB to that
   SG after the VPC origin exists. Without it the data plane is silently dead (requests never reach the ALB).

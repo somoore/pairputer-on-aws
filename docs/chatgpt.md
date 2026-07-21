@@ -12,7 +12,7 @@ Both are called out below - skipping either is the most common cause of a failed
 
 You need:
 
-- A deployed pairputer stack (the 1-click launch or `substrate/deploy.sh`).
+- A deployed pairputer stack (the 1-click launch).
 - A ChatGPT account with Developer mode available (Pro, Plus, Business, Enterprise, or Edu).
 - Your super-admin credentials from the invite email the deploy sent you.
 - Two values from your CloudFormation stack's **Outputs** tab: `McpEndpoint` and `ChatGPTClientId`.
@@ -136,7 +136,7 @@ review) is a documented follow-up. Outstanding: CSP-ON retest.
 | Cognito error page shows `invalid_request` with a client_id that isn't in your pool | The connector pins the OAuth client of a DELETED/replaced stack; "Reconnect" cannot fix it | Fully remove the connector and re-add it with the new stack's `McpEndpoint`, then re-do Step 4 (the recreated connector has a NEW callback id) |
 | Connects OK, then `MCP_ACTION_DISCOVERY_FAILED` / "Authentication succeeded, action discovery failed" / HTTP 401 "Reauthentication required" | The access token is missing the **`pairputer-mcp/invoke`** base scope, so AgentCore rejects it at tool discovery. Auth (password + callback) is fine; the scope is the problem. | In the connector's Advanced OAuth settings, add `pairputer-mcp/invoke` as a **Base scope**, then Disconnect + reconnect. Confirmed root cause 2026-07-17. |
 | OAuth popup shows Cognito error page | Callback not registered (`redirect_mismatch`) | Step 4 |
-| OAuth `redirect_mismatch` AFTER a deploy (was working before) | **Every `deploy.sh` re-deploys identity.yaml, and CloudFormation RESETS the ChatGPT client CallbackURLs to just the static legacy URL - dropping the per-connector callback ChatGPT uses.** | Re-run `substrate/wire-chatgpt.sh --register-callback '<the connector callback URL>'` after any deploy. The connector's callback id is stable per connector instance, so it's the same URL as before unless you deleted+recreated the connector. (wire-chatgpt.sh preserves existing callbacks + the full scope set.) |
+| OAuth `redirect_mismatch` AFTER a stack update (was working before) | **Re-deploying identity.yaml makes CloudFormation RESET the ChatGPT client CallbackURLs to just the static legacy URL - dropping the per-connector callback ChatGPT uses.** | Re-run `substrate/wire-chatgpt.sh --register-callback '<the connector callback URL>'` after the update. The connector's callback id is stable per connector instance, so it's the same URL as before unless you deleted+recreated the connector. (wire-chatgpt.sh preserves existing callbacks + the full scope set.) |
 | Any call errors: `unknown image_id: …` | A caller used a stale or guessed id | Expected fail-closed behavior. Run `list_capsules` and retry with the exact registered id; the widget itself defaults to the current capsule. |
 | "No app actions available yet" | ChatGPT hasn't pulled tools | Step 6 (Refresh) |
 | Widget shows stale behavior after a server redeploy | ChatGPT caches the widget resource per app version | Settings → Apps → pairputer → **Refresh** (bumps the version), then reload the conversation - reload alone is NOT enough |

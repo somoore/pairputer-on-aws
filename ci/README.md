@@ -9,7 +9,7 @@ Clean separation of concerns:
 
 | Directory | Audience | What it is |
 |---|---|---|
-| `substrate/cloudformation/` | **end users** | the deployable stack (Launch button / `deploy.sh`) |
+| `substrate/cloudformation/` | **end users** | the deployable stack (Launch button) |
 | `capsules/` | end users / capsule authors | reference capsules |
 | **`ci/`** | **pairputer maintainers only** | how we publish the signed public images users pull |
 

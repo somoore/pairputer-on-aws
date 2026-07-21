@@ -10,7 +10,7 @@ there is no callback-registration step and no OAuth scope to add.
 
 You need:
 
-- A deployed pairputer stack (the 1-click launch or `substrate/deploy.sh`).
+- A deployed pairputer stack (the 1-click launch).
 - A claude.ai account on the web.
 - Your super-admin credentials from the invite email the deploy sent you.
 - Two values from your CloudFormation stack's **Outputs** tab: `McpEndpoint` and `ClaudeClientId`.
