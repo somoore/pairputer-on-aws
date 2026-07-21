@@ -180,7 +180,8 @@ chat host's connector still pins the OLD registration, and the failure modes are
 
 Bedrock AgentCore natively answers unauthenticated MCP requests with
 `WWW-Authenticate: Bearer resource_metadata="<.well-known/oauth-protected-resource>"` and serves
-that document pointing at the Cognito issuer (PROBE-4, [README](./README.md)). Cognito serves OIDC
+that document pointing at the Cognito issuer (the RFC 9728 discovery chain in
+[`architecture.md`](./architecture.md)). Cognito serves OIDC
 discovery (`/.well-known/openid-configuration`); the RFC 8414 path 400s, and the MCP spec's OIDC
 fallback covers it - ChatGPT completed discovery against it live. Static public PKCE client; no
 DCR, no CIMD, no client secret.
@@ -199,10 +200,10 @@ DCR, no CIMD, no client secret.
 6. Repeat 2-5 on ChatGPT **desktop**. ✅ 2026-07-09 human-confirmed (gameplay, sound,
    keyboard/video/mouse, pop-out - docked panel, stall watchdog recovers the stream)
 7. Repeat with **Enforce CSP in developer mode ON**.
-8. Codex regression: the checklist in [`codex.md`](./codex.md) still passes. ✅ 2026-07-08
+8. Codex regression: Codex rides this same ChatGPT connector, so steps 1-7 cover it. ✅ 2026-07-08
 
 ## Probe results
 
-See [`README.md`](./README.md): PROBE-1 ✅ (renders `text/html;profile=mcp-app` unchanged),
-PROBE-7 ✅ (widget callTool works), PROBE-4/6 ✅ (auth discovery). Pending: PROBE-3 (audio/autoplay
-with CSP ON), PROBE-8 (display-mode remount).
+PROBE-1 ✅ (renders `text/html;profile=mcp-app` unchanged), PROBE-7 ✅ (widget callTool works),
+PROBE-4/6 ✅ (auth discovery, see [`architecture.md`](./architecture.md)). Pending: PROBE-3
+(audio/autoplay with CSP ON), PROBE-8 (display-mode remount).
