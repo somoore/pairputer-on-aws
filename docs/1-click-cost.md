@@ -1,16 +1,16 @@
-# 💸 What the 1-click actually deploys - and what it costs
+# 1-click deployment: resources, IAM, and cost
 
-Full transparency for **Path A (the 1-click CloudFormation launch)**: every AWS resource it creates in
-your account, every IAM role and what it's allowed to touch, and honest daily / weekly / monthly cost
-estimates - each resource linked to the exact CloudFormation code that creates it.
+This page lists every AWS resource the 1-click CloudFormation launch creates in your account, every
+IAM role and what it can touch, and daily, weekly, and monthly cost estimates. Each resource links to
+the exact CloudFormation code that creates it.
 
-> **TL;DR** - the always-on substrate idles at roughly **$1.90/day ≈ $13/week ≈ $55-60/month**.
-> Capsules bill **only while running**: the Workbench adds ≈ **$0.60 per active hour** (compute +
-> streaming), and ≈ **$0 while Frozen**. Scale-to-zero mode drops the idle baseline to ≈ **$40-45/month**.
+In short: the always-on substrate idles at roughly **$1.90/day, $13/week, or $55-60/month**. Capsules
+bill only while running - the Workbench adds about **$0.60 per active hour** (compute plus streaming)
+and about **$0 while frozen**. Scale-to-zero mode drops the idle baseline to about **$40-45/month**.
 
 ---
 
-## How to read this page
+## Before you read this page
 
 - **Region & date:** all prices are `us-east-1`, on-demand, as of **July 2026**. Verify current numbers
   with the [AWS Pricing Calculator](https://calculator.aws/) - AWS changes prices, this page doesn't
@@ -43,7 +43,7 @@ One root stack, up to seven nested stacks (two are conditional):
 
 ## Complete resource inventory
 
-### Root stack - [`pairputer.yaml`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml)
+### Root stack: [`pairputer.yaml`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml)
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -54,7 +54,7 @@ One root stack, up to seven nested stacks (two are conditional):
 
 Deploy-time helper Lambdas run for seconds during stack create/update - their runtime cost rounds to $0.
 
-### IdentityStack - Cognito
+### IdentityStack: Cognito
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -66,7 +66,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | Cognito WAF + association | `AWS::WAFv2::WebACL` (REGIONAL) | brute-force / abuse protection on the login endpoints | [#L154](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L154) |
 | 4 app clients | `AWS::Cognito::UserPoolClient` | Codex, ChatGPT, Claude (authorization-code) + one machine-to-machine client | [#L210](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L210) |
 
-### SecurityStack - secrets & signing
+### SecurityStack: secrets and signing
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -74,13 +74,13 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | Signing-key generator | Lambda + `Custom::` | generates the RSA key pair **inside your account** - nothing pairputer-side ever sees it | [#L53](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L53) |
 | CloudFront public key + key group | `AWS::CloudFront::PublicKey` / `KeyGroup` | the mandatory signed-URL gate on the streaming distribution | [#L72](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L72) |
 
-### SessionsStack - state
+### SessionsStack: state
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
 | Session table | `AWS::DynamoDB::Table` (on-demand) | per-tenant capsule sessions, leases, relay-activity index | [sessions.yaml#L7](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/sessions.yaml#L7) |
 
-### RelayNetworkStack - networking (default `CreateVpcFckNat` mode)
+### RelayNetworkStack: networking (default `CreateVpcFckNat` mode)
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -88,7 +88,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3/mo instead of a $32/mo NAT Gateway | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
 | NAT Gateway + EIP | `AWS::EC2::NatGateway` | **only** in `CreateVpcNatGateway` mode (not the default) | [#L144](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L144) |
 
-### RelayStack - the streaming data plane
+### RelayStack: the streaming data plane
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -105,7 +105,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 |---|---|---|---|
 | WebACL (CLOUDFRONT scope) | `AWS::WAFv2::WebACL` | AWS managed rule groups + a per-IP rate ceiling in front of the streaming distribution | [cloudfront-waf.yaml#L15](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/cloudfront-waf.yaml#L15) |
 
-### CapsuleImageStack - the bundled Pairputer Workbench
+### CapsuleImageStack: the bundled Pairputer Workbench
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -116,7 +116,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | Image build log group (14-day) | `AWS::Logs::LogGroup` | MicroVM image build logs | [#L140](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L140) |
 | SSM parameters (created at runtime) | SSM Parameter Store | capsule manifest chunks + immutable releases + `/current` pointer under `/pairputer/capsules/…` | [#L215](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L215) |
 
-### AgentCoreStack - the MCP control plane
+### AgentCoreStack: the MCP control plane
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
@@ -126,7 +126,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 
 ---
 
-## 🔐 IAM - every role and what it may touch
+## IAM: every role and what it can touch
 
 Summaries below; **the linked policy blocks are authoritative**. Design rule throughout: each role is
 single-purpose, and anything touching MicroVMs is **tag-scoped to `pairputer:capsule=true` images** - none of these roles can touch MicroVM images created outside pairputer.
@@ -153,7 +153,7 @@ MicroVM itself runs with `iamRole: none` - the capsule VM has **zero** AWS API a
 
 ---
 
-## 💰 Cost model
+## Cost model
 
 ### Assumptions (read these)
 
@@ -183,7 +183,7 @@ These run 24/7 whether or not anyone is connected:
 
 **Cheaper idle options:**
 
-| Change | New monthly baseline | Trade-off |
+| Change | New monthly baseline | Tradeoff |
 |---|---:|---|
 | `RelayWarmSeconds=0` (relay scales to zero when idle) | **≈ $40-45** | a cold-start pause on the next connect |
 | `CreateVpcNatGateway` instead of fck-nat | +$33 + $0.045/GB | managed NAT, no EC2 instance to trust |
