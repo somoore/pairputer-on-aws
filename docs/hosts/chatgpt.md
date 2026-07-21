@@ -27,7 +27,8 @@ substrate/wire-chatgpt.sh
 This prints the two values you'll paste into ChatGPT - `McpEndpoint` and `ChatGPTClientId` - and
 verifies the discovery chain ChatGPT depends on (401 `WWW-Authenticate resource_metadata` →
 protected-resource metadata → Cognito OIDC discovery). All three checks must be `[ok]` before
-touching ChatGPT. (No CloudFront proxy or extra infra is needed - Bedrock AgentCore serves the
+touching ChatGPT. (No CLI? Both values are on your CloudFormation stack's **Outputs** tab -
+`McpEndpoint` and `ChatGPTClientId` - but you'll still need the CLI once for step 4.) (No CloudFront proxy or extra infra is needed - Bedrock AgentCore serves the
 RFC 9728 metadata natively.)
 
 ### 2. Enable Developer mode

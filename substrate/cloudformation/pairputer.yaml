@@ -816,7 +816,7 @@ Outputs:
     Description: AgentCore Runtime ARN.
     Value: !GetAtt AgentCoreStack.Outputs.McpRuntimeArn
   McpEndpoint:
-    Description: The pre-encoded MCP URL to put in Codex config.toml.
+    Description: The MCP server URL every chat-host connector uses (ChatGPT, Claude, Codex).
     Value: !GetAtt AgentCoreStack.Outputs.McpEndpoint
   McpFullEndpoint:
     Description: >-
