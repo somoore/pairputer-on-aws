@@ -85,7 +85,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
 | VPC + IGW + 4 subnets + route tables | `AWS::EC2::*` | dedicated VPC (2 public + 2 private subnets) | [relay-network.yaml#L48](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L48) |
-| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3/mo instead of a $32/mo NAT Gateway | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
+| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3.70/mo flat, instead of a managed NAT Gateway (~$33/mo fixed **plus** $0.045/GB processed) | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
 | NAT Gateway + EIP | `AWS::EC2::NatGateway` | **only** in `CreateVpcNatGateway` mode (not the default) | [#L144](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L144) |
 
 ### RelayStack: the streaming data plane
@@ -186,7 +186,7 @@ These run 24/7 whether or not anyone is connected:
 | Change | New monthly baseline | Tradeoff |
 |---|---:|---|
 | `RelayWarmSeconds=0` (relay scales to zero when idle) | **≈ $40-45** | a cold-start pause on the next connect |
-| `CreateVpcNatGateway` instead of fck-nat | +$33 + $0.045/GB | managed NAT, no EC2 instance to trust |
+| `CreateVpcNatGateway` instead of fck-nat | **+$33/mo fixed, plus $0.045/GB** processed | fully managed NAT, no EC2 instance to run or trust. The per-GB charge is the catch: light egress adds a few dollars, but heavy outbound could push it well past $33 |
 | `EnableCloudFrontWaf=false` and/or trimming the Cognito WAF | −$10-18 | you lose the abuse ceiling - not recommended |
 
 ### Capsules - you pay only while they run
