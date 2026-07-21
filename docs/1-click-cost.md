@@ -29,28 +29,28 @@ One root stack, up to seven nested stacks (two are conditional):
 
 | Nested stack | What it is | Created when |
 |---|---|---|
-| [`IdentityStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml) | Cognito OAuth (user pool, 4 app clients, hosted domain, your admin user) | always |
-| [`SecurityStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml) | Secrets + CloudFront signing key pair | always |
-| [`SessionsStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/sessions.yaml) | DynamoDB session table | always |
-| [`RelayNetworkStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml) | Dedicated VPC + egress NAT | always |
-| [`RelayStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml) | ECS/Fargate streaming relay + internal ALB + CloudFront | always |
-| [`CapsuleImageStack`](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml) | Builds + registers the Pairputer Workbench MicroVM image | `BundleReferenceCapsule=true` (default) |
-| [`CloudFrontWafStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/cloudfront-waf.yaml) | CLOUDFRONT-scope WAF on the streaming front door | `us-east-1` + `EnableCloudFrontWaf=true` (default) |
-| [`ImageCopyStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/image-copy.yaml) | ECR repos + CodeBuild that verify-and-copy our signed images into your private ECR | **Private image mode only** - not created by the default 1-click |
-| [`AgentCoreStack`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml) | The MCP control plane on Bedrock AgentCore | always |
+| [`IdentityStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml) | Cognito OAuth (user pool, 4 app clients, hosted domain, your admin user) | always |
+| [`SecurityStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/security.yaml) | Secrets + CloudFront signing key pair | always |
+| [`SessionsStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/sessions.yaml) | DynamoDB session table | always |
+| [`RelayNetworkStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay-network.yaml) | Dedicated VPC + egress NAT | always |
+| [`RelayStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml) | ECS/Fargate streaming relay + internal ALB + CloudFront | always |
+| [`CapsuleImageStack`](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml) | Builds + registers the Pairputer Workbench MicroVM image | `BundleReferenceCapsule=true` (default) |
+| [`CloudFrontWafStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/cloudfront-waf.yaml) | CLOUDFRONT-scope WAF on the streaming front door | `us-east-1` + `EnableCloudFrontWaf=true` (default) |
+| [`ImageCopyStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/image-copy.yaml) | ECR repos + CodeBuild that verify-and-copy our signed images into your private ECR | **Private image mode only** - not created by the default 1-click |
+| [`AgentCoreStack`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml) | The MCP control plane on Bedrock AgentCore | always |
 
 ---
 
 ## Complete resource inventory
 
-### Root stack: [`pairputer.yaml`](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml)
+### Root stack: [`pairputer.yaml`](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml)
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| 7 nested stacks | `AWS::CloudFormation::Stack` | listed above | [pairputer.yaml](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml#L440) |
-| `FckNatAmiResolver` | Lambda + `Custom::` | resolves the current fck-nat ARM64 AMI for the region at deploy time | [#L497](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml#L497) |
-| `VpcCidrResolver` | Lambda + `Custom::` | resolves your VPC's CIDR in `ExistingVpc` mode | [#L551](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml#L551) |
-| `CapsuleImageOverrideValidation` | Lambda + `Custom::` | validates a prebuilt image ARN override (only if you use one) | [#L607](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml#L607) |
+| 7 nested stacks | `AWS::CloudFormation::Stack` | listed above | [pairputer.yaml](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml#L440) |
+| `FckNatAmiResolver` | Lambda + `Custom::` | resolves the current fck-nat ARM64 AMI for the region at deploy time | [#L497](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml#L497) |
+| `VpcCidrResolver` | Lambda + `Custom::` | resolves your VPC's CIDR in `ExistingVpc` mode | [#L551](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml#L551) |
+| `CapsuleImageOverrideValidation` | Lambda + `Custom::` | validates a prebuilt image ARN override (only if you use one) | [#L607](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml#L607) |
 
 Deploy-time helper Lambdas run for seconds during stack create/update - their runtime cost rounds to $0.
 
@@ -58,71 +58,71 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| User pool | `AWS::Cognito::UserPool` | your users; MFA-capable; branded invite email | [identity.yaml#L31](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L31) |
-| Resource server | `AWS::Cognito::UserPoolResourceServer` | the `pairputer-mcp/invoke` OAuth scope | [#L100](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L100) |
-| `SuperAdmins` group | `AWS::Cognito::UserPoolGroup` | admin group | [#L110](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L110) |
-| Your admin user + group attachment | `AWS::Cognito::UserPoolUser` (+`…ToGroupAttachment`) | created from the email you enter; Cognito sends the invite | [#L124](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L124) |
-| Hosted domain | `AWS::Cognito::UserPoolDomain` | `pairputer-<your-account-id>.auth.us-east-1.amazoncognito.com` | [#L147](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L147) |
-| Cognito WAF + association | `AWS::WAFv2::WebACL` (REGIONAL) | brute-force / abuse protection on the login endpoints | [#L154](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L154) |
-| 4 app clients | `AWS::Cognito::UserPoolClient` | Codex, ChatGPT, Claude (authorization-code) + one machine-to-machine client | [#L210](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/identity.yaml#L210) |
+| User pool | `AWS::Cognito::UserPool` | your users; MFA-capable; branded invite email | [identity.yaml#L31](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L31) |
+| Resource server | `AWS::Cognito::UserPoolResourceServer` | the `pairputer-mcp/invoke` OAuth scope | [#L100](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L100) |
+| `SuperAdmins` group | `AWS::Cognito::UserPoolGroup` | admin group | [#L110](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L110) |
+| Your admin user + group attachment | `AWS::Cognito::UserPoolUser` (+`…ToGroupAttachment`) | created from the email you enter; Cognito sends the invite | [#L124](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L124) |
+| Hosted domain | `AWS::Cognito::UserPoolDomain` | `pairputer-<your-account-id>.auth.us-east-1.amazoncognito.com` | [#L147](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L147) |
+| Cognito WAF + association | `AWS::WAFv2::WebACL` (REGIONAL) | brute-force / abuse protection on the login endpoints | [#L154](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L154) |
+| 4 app clients | `AWS::Cognito::UserPoolClient` | Codex, ChatGPT, Claude (authorization-code) + one machine-to-machine client | [#L210](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/identity.yaml#L210) |
 
 ### SecurityStack: secrets and signing
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| 3 secrets | `AWS::SecretsManager::Secret` | relay session HMAC, relay origin header, CloudFront signing private key | [security.yaml#L7](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L7) |
-| Signing-key generator | Lambda + `Custom::` | generates the RSA key pair **inside your account** - nothing pairputer-side ever sees it | [#L53](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L53) |
-| CloudFront public key + key group | `AWS::CloudFront::PublicKey` / `KeyGroup` | the mandatory signed-URL gate on the streaming distribution | [#L72](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L72) |
+| 3 secrets | `AWS::SecretsManager::Secret` | relay session HMAC, relay origin header, CloudFront signing private key | [security.yaml#L7](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/security.yaml#L7) |
+| Signing-key generator | Lambda + `Custom::` | generates the RSA key pair **inside your account** - nothing pairputer-side ever sees it | [#L53](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/security.yaml#L53) |
+| CloudFront public key + key group | `AWS::CloudFront::PublicKey` / `KeyGroup` | the mandatory signed-URL gate on the streaming distribution | [#L72](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/security.yaml#L72) |
 
 ### SessionsStack: state
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| Session table | `AWS::DynamoDB::Table` (on-demand) | per-tenant capsule sessions, leases, relay-activity index | [sessions.yaml#L7](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/sessions.yaml#L7) |
+| Session table | `AWS::DynamoDB::Table` (on-demand) | per-tenant capsule sessions, leases, relay-activity index | [sessions.yaml#L7](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/sessions.yaml#L7) |
 
 ### RelayNetworkStack: networking (default `CreateVpcFckNat` mode)
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| VPC + IGW + 4 subnets + route tables | `AWS::EC2::*` | dedicated VPC (2 public + 2 private subnets) | [relay-network.yaml#L48](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L48) |
-| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3.70/mo flat, instead of a managed NAT Gateway (~$33/mo fixed **plus** $0.045/GB processed) | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
-| NAT Gateway + EIP | `AWS::EC2::NatGateway` | **only** in `CreateVpcNatGateway` mode (not the default) | [#L144](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L144) |
+| VPC + IGW + 4 subnets + route tables | `AWS::EC2::*` | dedicated VPC (2 public + 2 private subnets) | [relay-network.yaml#L48](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay-network.yaml#L48) |
+| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3.70/mo flat, instead of a managed NAT Gateway (~$33/mo fixed **plus** $0.045/GB processed) | [#L215](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
+| NAT Gateway + EIP | `AWS::EC2::NatGateway` | **only** in `CreateVpcNatGateway` mode (not the default) | [#L144](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay-network.yaml#L144) |
 
 ### RelayStack: the streaming data plane
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| ECS cluster + service + task definition | `AWS::ECS::*` | the stateful relay: **1 × Fargate task, ARM64, 0.5 vCPU / 1 GB** | [relay.yaml#L237](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L237) |
-| Auto-scaling target + 2 policies | `AWS::ApplicationAutoScaling::*` | scales relay tasks with active sessions (max `RelayMaxCount`) | [#L306](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L306) |
-| Internal ALB + target group + listener + rule | `AWS::ElasticLoadBalancingV2::*` | private front door for the relay (CloudFront VPC origin requirement) | [#L177](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L177) |
-| CloudFront distribution + VPC origin | `AWS::CloudFront::Distribution` | the public streaming endpoint; **signed URLs required** (key group is mandatory) | [#L456](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L456) |
-| 2 security groups + origin-SG custom resource | `AWS::EC2::SecurityGroup` | ALB accepts only CloudFront's managed prefix list; tasks accept only the ALB | [#L151](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L151) |
-| Relay log group (14-day retention) | `AWS::Logs::LogGroup` | relay + shipped capsule-runtime logs | [#L134](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L134) |
+| ECS cluster + service + task definition | `AWS::ECS::*` | the stateful relay: **1 × Fargate task, ARM64, 0.5 vCPU / 1 GB** | [relay.yaml#L237](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L237) |
+| Auto-scaling target + 2 policies | `AWS::ApplicationAutoScaling::*` | scales relay tasks with active sessions (max `RelayMaxCount`) | [#L306](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L306) |
+| Internal ALB + target group + listener + rule | `AWS::ElasticLoadBalancingV2::*` | private front door for the relay (CloudFront VPC origin requirement) | [#L177](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L177) |
+| CloudFront distribution + VPC origin | `AWS::CloudFront::Distribution` | the public streaming endpoint; **signed URLs required** (key group is mandatory) | [#L456](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L456) |
+| 2 security groups + origin-SG custom resource | `AWS::EC2::SecurityGroup` | ALB accepts only CloudFront's managed prefix list; tasks accept only the ALB | [#L151](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L151) |
+| Relay log group (14-day retention) | `AWS::Logs::LogGroup` | relay + shipped capsule-runtime logs | [#L134](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L134) |
 
 ### CloudFrontWafStack
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| WebACL (CLOUDFRONT scope) | `AWS::WAFv2::WebACL` | AWS managed rule groups + a per-IP rate ceiling in front of the streaming distribution | [cloudfront-waf.yaml#L15](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/cloudfront-waf.yaml#L15) |
+| WebACL (CLOUDFRONT scope) | `AWS::WAFv2::WebACL` | AWS managed rule groups + a per-IP rate ceiling in front of the streaming distribution | [cloudfront-waf.yaml#L15](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/cloudfront-waf.yaml#L15) |
 
 ### CapsuleImageStack: the bundled Pairputer Workbench
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| Workbench MicroVM image (`pairputer-workbench`, 8 GB min) | `AWS::Lambda::MicrovmImage` | built **in your account** from the public, integrity-hashed build context | [capsule-stack.yaml#L320](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L320) |
-| Manifest stager | Lambda + `Custom::` | reads `capsule.manifest.json` from the context zip, stages it into immutable chunked SSM parameters | [#L215](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L215) |
-| Release publisher | Lambda + `Custom::` | atomically commits the immutable release record + `/current` pointer in SSM | [#L426](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L426) |
-| MicroVM reaper | Lambda + `Custom::` | on stack delete: terminates VMs and deletes the image so teardown never wedges | [#L570](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L570) |
-| Image build log group (14-day) | `AWS::Logs::LogGroup` | MicroVM image build logs | [#L140](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L140) |
-| SSM parameters (created at runtime) | SSM Parameter Store | capsule manifest chunks + immutable releases + `/current` pointer under `/pairputer/capsules/…` | [#L215](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L215) |
+| Workbench MicroVM image (`pairputer-workbench`, 8 GB min) | `AWS::Lambda::MicrovmImage` | built **in your account** from the public, integrity-hashed build context | [capsule-stack.yaml#L320](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L320) |
+| Manifest stager | Lambda + `Custom::` | reads `capsule.manifest.json` from the context zip, stages it into immutable chunked SSM parameters | [#L215](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L215) |
+| Release publisher | Lambda + `Custom::` | atomically commits the immutable release record + `/current` pointer in SSM | [#L426](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L426) |
+| MicroVM reaper | Lambda + `Custom::` | on stack delete: terminates VMs and deletes the image so teardown never wedges | [#L570](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L570) |
+| Image build log group (14-day) | `AWS::Logs::LogGroup` | MicroVM image build logs | [#L140](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L140) |
+| SSM parameters (created at runtime) | SSM Parameter Store | capsule manifest chunks + immutable releases + `/current` pointer under `/pairputer/capsules/…` | [#L215](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L215) |
 
 ### AgentCoreStack: the MCP control plane
 
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
-| AgentCore runtime | `AWS::BedrockAgentCore::Runtime` (or API-backed custom resource in Public image mode) | the MCP server every chat host connects to | [agentcore.yaml#L267](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L267) |
-| Runtime manager | Lambda + `Custom::` | drives AgentCore create/update for public-ECR images (the native CFN resource only accepts private ECR) | [#L369](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L369) |
-| Callback registrar | Lambda + custom resource | registers the exact OAuth callback URL on the Cognito clients | [#L453](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L453) |
+| AgentCore runtime | `AWS::BedrockAgentCore::Runtime` (or API-backed custom resource in Public image mode) | the MCP server every chat host connects to | [agentcore.yaml#L267](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L267) |
+| Runtime manager | Lambda + `Custom::` | drives AgentCore create/update for public-ECR images (the native CFN resource only accepts private ECR) | [#L369](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L369) |
+| Callback registrar | Lambda + custom resource | registers the exact OAuth callback URL on the Cognito clients | [#L453](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L453) |
 
 ---
 
@@ -133,19 +133,19 @@ single-purpose, and anything touching MicroVMs is **tag-scoped to `pairputer:cap
 
 | Role | Used by | Permissions (summary) | Source |
 |---|---|---|---|
-| `ControllerRole` | the MCP runtime | Run/Get/Suspend/Resume/Terminate/auth-token **on pairputer-tagged MicroVM images only** (tag condition); tag-based capsule discovery; read `/pairputer/capsules/*` SSM; session-table CRUD; read the relay + signing secrets | [agentcore.yaml#L91](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L91) |
-| `CustomRuntimeRole` | runtime-manager Lambda | `bedrock-agentcore-control` create/update/delete of **this stack's** runtime; logs | [#L321](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L321) |
-| `CallbackRegistrarRole` | callback Lambda | update **this pool's** Cognito app-client callback URLs; logs | [#L436](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/agentcore.yaml#L436) |
-| `RelayExecutionRole` | ECS agent | pull the relay image, write container logs (standard ECS execution) | [relay.yaml#L59](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L59) |
-| `RelayTaskRole` | the relay container | session-table read/write; MicroVM data-plane auth tokens **tag-scoped**; ship capsule runtime logs; read relay secrets | [#L71](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L71) |
-| `FckNatRole` + instance profile | fck-nat EC2 | the standard fck-nat ENI attach/route management | [relay-network.yaml#L179](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L179) |
-| `AlbFromCloudFrontOriginSgRole` | deploy-time Lambda | maintain the SG rule pinning the ALB to CloudFront's origin prefix list | [relay.yaml#L368](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay.yaml#L368) |
-| `SigningKeyCustomResourceRole` | deploy-time Lambda | create/rotate the CloudFront signing secret **in your Secrets Manager** | [security.yaml#L30](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/security.yaml#L30) |
-| `MicrovmImageBuildRole` | AWS image builder | `s3:GetObject` on the build-context bucket; build logs | [capsule-stack.yaml#L146](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L146) |
-| `ManifestStagerRole` | stager Lambda | `s3:GetObject` on the context zip; SSM get/put **scoped to `/pairputer/capsules/<this-capsule>/*`** | [#L188](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L188) |
-| `CapsuleReleasePublisherRole` | publisher Lambda | SSM get/put **scoped to `/pairputer/capsules/<this-capsule>/*`** | [#L402](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L402) |
-| `MicrovmReaperRole` | teardown Lambda | list/terminate MicroVMs + delete image **scoped to this stack's image ARN** | [#L539](https://github.com/somoore/pairputer/blob/main/capsules/nested/capsule-stack.yaml#L539) |
-| Root-stack resolver/validator roles | deploy-time Lambdas | read-only describe calls (AMI lookup, VPC CIDR, image-state validation); logs | [pairputer.yaml#L472](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/pairputer.yaml#L472) |
+| `ControllerRole` | the MCP runtime | Run/Get/Suspend/Resume/Terminate/auth-token **on pairputer-tagged MicroVM images only** (tag condition); tag-based capsule discovery; read `/pairputer/capsules/*` SSM; session-table CRUD; read the relay + signing secrets | [agentcore.yaml#L91](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L91) |
+| `CustomRuntimeRole` | runtime-manager Lambda | `bedrock-agentcore-control` create/update/delete of **this stack's** runtime; logs | [#L321](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L321) |
+| `CallbackRegistrarRole` | callback Lambda | update **this pool's** Cognito app-client callback URLs; logs | [#L436](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/agentcore.yaml#L436) |
+| `RelayExecutionRole` | ECS agent | pull the relay image, write container logs (standard ECS execution) | [relay.yaml#L59](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L59) |
+| `RelayTaskRole` | the relay container | session-table read/write; MicroVM data-plane auth tokens **tag-scoped**; ship capsule runtime logs; read relay secrets | [#L71](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L71) |
+| `FckNatRole` + instance profile | fck-nat EC2 | the standard fck-nat ENI attach/route management | [relay-network.yaml#L179](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay-network.yaml#L179) |
+| `AlbFromCloudFrontOriginSgRole` | deploy-time Lambda | maintain the SG rule pinning the ALB to CloudFront's origin prefix list | [relay.yaml#L368](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/relay.yaml#L368) |
+| `SigningKeyCustomResourceRole` | deploy-time Lambda | create/rotate the CloudFront signing secret **in your Secrets Manager** | [security.yaml#L30](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/nested/security.yaml#L30) |
+| `MicrovmImageBuildRole` | AWS image builder | `s3:GetObject` on the build-context bucket; build logs | [capsule-stack.yaml#L146](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L146) |
+| `ManifestStagerRole` | stager Lambda | `s3:GetObject` on the context zip; SSM get/put **scoped to `/pairputer/capsules/<this-capsule>/*`** | [#L188](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L188) |
+| `CapsuleReleasePublisherRole` | publisher Lambda | SSM get/put **scoped to `/pairputer/capsules/<this-capsule>/*`** | [#L402](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L402) |
+| `MicrovmReaperRole` | teardown Lambda | list/terminate MicroVMs + delete image **scoped to this stack's image ARN** | [#L539](https://github.com/somoore/pairputer-on-aws/blob/main/capsules/nested/capsule-stack.yaml#L539) |
+| Root-stack resolver/validator roles | deploy-time Lambdas | read-only describe calls (AMI lookup, VPC CIDR, image-state validation); logs | [pairputer.yaml#L472](https://github.com/somoore/pairputer-on-aws/blob/main/substrate/cloudformation/pairputer.yaml#L472) |
 
 **What is *not* here:** no static access keys anywhere; no role assumable from outside your account; the
 MicroVM itself runs with `iamRole: none` - the capsule VM has **zero** AWS API access. Full model:

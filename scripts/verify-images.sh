@@ -20,8 +20,8 @@ set -euo pipefail
 
 # --- The signer identity. These MUST match how CI signs (.github/workflows/publish-images.yml). ---------
 ID_ISSUER="https://token.actions.githubusercontent.com"
-# Images are keyless-signed by publish-images.yml in somoore/pairputer.
-ID_REGEXP="${PAIRPUTER_SIGNER_IDENTITY_REGEXP:-^https://github.com/somoore/pairputer/.github/workflows/.*@refs/heads/main$}"
+# Images are keyless-signed by publish-images.yml in somoore/pairputer-on-aws.
+ID_REGEXP="${PAIRPUTER_SIGNER_IDENTITY_REGEXP:-^https://github.com/somoore/pairputer-on-aws/.github/workflows/.*@refs/heads/main$}"
 
 # --- Pinned Sigstore trust root => offline, fail-closed verification (no egress at verify time). ---------
 # cosign v3 pins the root via the --trusted-root FLAG (the old SIGSTORE_ROOT_FILE env var is a v2 relic and

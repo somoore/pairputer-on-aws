@@ -12,7 +12,7 @@ Parameters:
     Default: somoore
   GitHubRepo:
     Type: String
-    Default: pairputer
+    Default: pairputer-on-aws
   GitHubRef:
     Type: String
     Default: refs/heads/main
@@ -27,7 +27,7 @@ Parameters:
     Type: String
     Default: "1303487311"
     Description: >-
-      GitHub numeric repository id (somoore/pairputer). Find via: gh api repos/OWNER/REPO --jq .id
+      GitHub numeric repository id (somoore/pairputer-on-aws). Find via: gh api repos/OWNER/REPO --jq .id
   LaunchBucketName:
     Type: String
     Default: pairputer-launch

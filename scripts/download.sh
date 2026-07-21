@@ -10,7 +10,7 @@
 #      redirect_uri mismatch).
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/somoore/pairputer/main/scripts/download.sh -o pairputer-setup.sh
+#   curl -fsSL https://raw.githubusercontent.com/somoore/pairputer-on-aws/main/scripts/download.sh -o pairputer-setup.sh
 #   less pairputer-setup.sh          # review it — never pipe a config-editing script straight to a shell
 #   AWS_REGION=us-east-1 bash pairputer-setup.sh
 #
@@ -19,11 +19,11 @@
 #   PAIRPUTER_STACK_NAME                default pairputer
 #   PAIRPUTER_CODEX_SERVER_NAME         default pairputer
 #   PAIRPUTER_REF                       repo ref to fetch from (default main)
-#   PAIRPUTER_GITHUB_REPO               owner/repo to fetch from (default somoore/pairputer)
+#   PAIRPUTER_GITHUB_REPO               owner/repo to fetch from (default somoore/pairputer-on-aws)
 set -euo pipefail
 
 REF="${PAIRPUTER_REF:-main}"
-REPO="${PAIRPUTER_GITHUB_REPO:-somoore/pairputer}"
+REPO="${PAIRPUTER_GITHUB_REPO:-somoore/pairputer-on-aws}"
 BASE="https://raw.githubusercontent.com/${REPO}/${REF}/substrate"
 : "${AWS_REGION:=${PAIRPUTER_AWS_REGION:-us-east-1}}"; export AWS_REGION
 

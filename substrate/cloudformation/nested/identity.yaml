@@ -78,8 +78,8 @@ Resources:
             <div style="padding:20px 30px 8px;">
             <div style="font-size:16px;font-weight:800;color:#111e46;">Connect your AI apps</div>
             <div style="font-size:13px;color:#56617d;margin-top:6px;line-height:1.6;">Two connectors cover web, desktop, and mobile. Follow the setup guide for each &mdash; everything you need to paste comes from your CloudFormation stack's <b style="color:#111e46;">Outputs</b> tab.</div>
-            <div style="font-size:15px;line-height:2;margin-top:12px;"><a href="https://github.com/somoore/pairputer/blob/main/docs/chatgpt.md" style="color:#7653e6;font-weight:700;text-decoration:none;">Set up ChatGPT &rarr;</a></div>
-            <div style="font-size:15px;line-height:2;"><a href="https://github.com/somoore/pairputer/blob/main/docs/claude.md" style="color:#7653e6;font-weight:700;text-decoration:none;">Set up Claude &rarr;</a></div>
+            <div style="font-size:15px;line-height:2;margin-top:12px;"><a href="https://github.com/somoore/pairputer-on-aws/blob/main/docs/chatgpt.md" style="color:#7653e6;font-weight:700;text-decoration:none;">Set up ChatGPT &rarr;</a></div>
+            <div style="font-size:15px;line-height:2;"><a href="https://github.com/somoore/pairputer-on-aws/blob/main/docs/claude.md" style="color:#7653e6;font-weight:700;text-decoration:none;">Set up Claude &rarr;</a></div>
             <div style="font-size:12px;color:#56617d;margin-top:8px;line-height:1.5;">Each covers web, desktop, and mobile &middot; Codex rides the ChatGPT connector.</div>
             </div>
             <div style="padding:14px 30px 10px;"><div style="font-size:14px;color:#111e46;line-height:1.6;background:#fff8e8;border:1px solid #d8d1eb;border-radius:8px;padding:14px 18px;">&#128421;&#65039; Once connected, ask your AI to open the <b>Pairputer Workbench</b>. A shared Linux desktop streams straight into your chat, and you and the model drive the same live machine.</div></div>

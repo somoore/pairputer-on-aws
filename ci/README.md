@@ -17,7 +17,7 @@ Clean separation of concerns:
 
 - **`pairputer-ci.yaml`** — deploy ONCE in the account that owns the public images. Creates:
   - the **GitHub Actions OIDC provider** (so CI authenticates to AWS with no stored keys),
-  - a **least-privilege push role** assumable ONLY by `somoore/pairputer` on `refs/heads/main` (scoped to
+  - a **least-privilege push role** assumable ONLY by `somoore/pairputer-on-aws` on `refs/heads/main` (scoped to
     `sts:AssumeRoleWithWebIdentity` with `sub`/`aud` conditions; permissions limited to `ecr-public` push
     on exactly the two named repos),
   - the two **public ECR repos** (`pairputer-mcp`, `pairputer-stateful-relay`), immutable tags.

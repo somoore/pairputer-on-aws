@@ -65,7 +65,7 @@ chain, zero stored secrets:
 
 1. **AWS auth without stored keys** — the workflow assumes an IAM role via GitHub OIDC
    (`aws-actions/configure-aws-credentials` with `role-to-assume`); the role's trust policy is scoped to
-   `repo:somoore/pairputer:ref:refs/heads/main` and grants only ECR-public push.
+   `repo:somoore/pairputer-on-aws:ref:refs/heads/main` and grants only ECR-public push.
 2. **Build + push ARM64**, capturing the **digest** (never rely on the tag downstream).
 3. **cosign keyless sign the digest** (workflow has `id-token: write`; cosign uses the GH Actions OIDC
    token — no private key):
@@ -96,7 +96,7 @@ scripts/verify-images.sh          # verify the digests the template pins
 # under the hood, per digest:
 cosign verify --offline --trusted-root scripts/sigstore-trusted-root.json \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  --certificate-identity-regexp 'https://github.com/somoore/pairputer/.github/workflows/.*@refs/heads/main' \
+  --certificate-identity-regexp 'https://github.com/somoore/pairputer-on-aws/.github/workflows/.*@refs/heads/main' \
   public.ecr.aws/<alias>/<repo>@sha256:<digest>
 cosign verify-attestation --offline --trusted-root scripts/sigstore-trusted-root.json \
   --type slsaprovenance <same identity flags> <same digest>

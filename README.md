@@ -74,7 +74,7 @@ Workbench and deploy your build from source), clone the repo and run the from-so
 the MCP + relay images locally, pushes them to your private ECR, and deploys the same stack:
 
 ```bash
-git clone https://github.com/somoore/pairputer && cd pairputer
+git clone https://github.com/somoore/pairputer-on-aws && cd pairputer-on-aws
 substrate/deploy.sh   # needs a running Docker daemon; builds from source into your account
 ```
 
