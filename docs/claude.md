@@ -1,34 +1,36 @@
-# Host: Claude (web + desktop)
+# Connect Claude to pairputer
 
-Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-09; re-verified on a fresh
-1-click stack 2026-07-17 and 2026-07-20)** - OAuth, tools (incl. tag-discovered capsule cartridge
-tools), widget render, direct-connect video + audio, keyboard/mouse, freeze/thaw/launch using the widget
-buttons, fullscreen. No PiP (Claude does not offer it).
+Add pairputer as a custom connector in Claude, then open the Pairputer Workbench from any chat. Once
+you connect Claude on the web, the connector also works in the Claude desktop and mobile apps.
 
-The first MCP-Apps-standard host (SEP-1865) - no `window.openai`, no iframe player. Adding it
-exposed every hidden OpenAI-specific dependency in the widget; the full war story is `blog5.md`.
+Claude is simpler to connect than ChatGPT: its redirect URLs are pre-registered at deploy time, so
+there is no callback-registration step and no OAuth scope to add.
 
----
+## Before you begin
 
-## End-to-end setup: zero → driving the Pairputer Workbench in Claude web
+You need:
 
-Prerequisites: a deployed pairputer stack, a claude.ai account (web), and a pairputer Cognito user
-(the super-admin from the deploy works). Unlike ChatGPT there is **no callback-registration step
-and no base-scope step** - Claude's redirect URLs are fixed and baked in at deploy time, and Claude
-requests the full scope set from discovery on its own.
+- A deployed pairputer stack (the 1-click launch or `substrate/deploy.sh`).
+- A claude.ai account on the web.
+- Your super-admin credentials from the invite email the deploy sent you.
+- Two values from your CloudFormation stack's **Outputs** tab: `McpEndpoint` and `ClaudeClientId`.
 
-### 1. Collect your stack values + verify the auth chain
+## 1. Collect your stack values
+
+Open your CloudFormation stack's **Outputs** tab and copy the `McpEndpoint` and `ClaudeClientId`
+values.
+
+If you have the AWS CLI, this command prints both values and verifies the auth discovery chain (a 401
+`WWW-Authenticate resource_metadata` response, protected-resource metadata, then Cognito OIDC
+discovery):
 
 ```bash
 substrate/wire-claude.sh
 ```
 
-This prints the two values you'll paste into Claude - `McpEndpoint` and `ClaudeClientId` - and
-verifies the discovery chain Claude depends on (401 `WWW-Authenticate resource_metadata` →
-protected-resource metadata → Cognito OIDC discovery). No registration step follows; callbacks are
-pre-baked. (No CLI? Both values are on your CloudFormation stack's **Outputs** tab.)
+Claude needs no callback registration - its callbacks are pre-baked into the stack.
 
-### 2. Add the custom connector
+## 2. Add the custom connector
 
 claude.ai → **Settings → Customize → Connectors** → **Add** (top-right) → **Add custom connector**.
 (The old *Settings → Connectors* path now redirects here - "Connectors have moved to Customize".)
@@ -47,7 +49,7 @@ Click **Add**.
 > `pairputer-<accountid>.auth.<region>.amazoncognito.com` with `redirect_uri=…/api/mcp/auth_callback`
 > already accepted.
 
-### 3. Connect (OAuth)
+## 3. Connect
 
 The connector appears with a **Connect** button → **Connect** → sign in on the Cognito hosted UI
 with your super-admin email + the temp password from the invite email (first login forces a
@@ -56,7 +58,7 @@ permanent password) → it auto-redirects back. Done.
 Reconnect UX (shown by the widget on auth expiry): Settings → Customize → Connectors → pairputer →
 **Reconnect**. (After a stack redeploy, Reconnect is NOT enough - see the troubleshooting table.)
 
-### 4. Play
+## 4. Open the Workbench
 
 Open a **new** chat → type:
 
@@ -101,7 +103,19 @@ chat host's connector still pins the OLD registration, and the failure modes are
 - Only the **ChatGPT (web)** and **Claude (web)** connectors need setup: each covers that product's
   web, desktop, and mobile apps, and **Codex rides the ChatGPT connector**.
 
-## Capabilities / constraints (all empirically proven)
+---
+
+# Reference
+
+The rest of this page is background for maintainers: verified capabilities, host quirks, and a
+regression checklist. You do not need any of it to connect Claude.
+
+**Status:** web and desktop verified end-to-end (2026-07-09; re-verified on fresh 1-click stacks
+2026-07-17 and 2026-07-20). Claude was the first MCP-Apps-standard host (SEP-1865) - no
+`window.openai`, no iframe player; adding it surfaced every hidden OpenAI-specific assumption in
+the widget.
+
+## Capabilities and constraints (empirically proven)
 
 - **Bridge:** standard MCP Apps `ui/*` postMessage - NOT `window.openai`. Tool `_meta` must carry
   the **nested** `_meta.ui.resourceUri` (a flat `ui/resourceUri` key is ignored); resource mime

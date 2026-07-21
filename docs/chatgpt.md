@@ -1,37 +1,37 @@
-# Host: ChatGPT (web + desktop)
+# Connect ChatGPT to pairputer
 
-Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-08/09)** - OAuth, tools
-(incl. tag-discovered capsule cartridge tools), widget render, 30 FPS video through the relay
-player iframe, keyboard/mouse/audio, gameplay, freeze/thaw/launch using the widget buttons
-(widget-initiated callTool works on ChatGPT), PiP pop-out on web (floating) and desktop (docked
-panel with fill layout + stream-stall auto-recovery). Outstanding: CSP-ON retest.
+Add pairputer as a Developer Mode connector in ChatGPT, then open the Pairputer Workbench from any
+chat. Once you connect ChatGPT on the web, the connector also works in the ChatGPT desktop and mobile
+apps, and in Codex (Codex rides the ChatGPT connector).
 
-Distribution target: **Developer Mode connectors** (private). App-store submission (dedicated widget
-domain `_meta.ui.domain`, OpenAI review - stricter for iframe embeds) is a documented follow-up.
+ChatGPT needs two steps that Claude does not: you add the `pairputer-mcp/invoke` OAuth base scope
+(step 3), and you register the connector's callback URL against Cognito with a CLI command (step 4).
+Both are called out below - skipping either is the most common cause of a failed connect.
 
----
+## Before you begin
 
-## End-to-end setup: zero → driving the Pairputer Workbench in ChatGPT web
+You need:
 
-Every step below was executed and verified live on 2026-07-08. Prerequisites: a deployed pairputer
-stack (multi-host update or later), a ChatGPT account with Developer mode available (Pro / Plus /
-Business / Enterprise / Edu), a pairputer Cognito user (the super-admin from the deploy works), and
-AWS CLI credentials for the deploying account (one command in step 4 needs them).
+- A deployed pairputer stack (the 1-click launch or `substrate/deploy.sh`).
+- A ChatGPT account with Developer mode available (Pro, Plus, Business, Enterprise, or Edu).
+- Your super-admin credentials from the invite email the deploy sent you.
+- Two values from your CloudFormation stack's **Outputs** tab: `McpEndpoint` and `ChatGPTClientId`.
+- AWS CLI credentials for the deploying account (step 4 runs one CLI command).
 
-### 1. Collect your stack values + verify the auth chain
+## 1. Collect your stack values
 
 ```bash
 substrate/wire-chatgpt.sh
 ```
 
-This prints the two values you'll paste into ChatGPT - `McpEndpoint` and `ChatGPTClientId` - and
-verifies the discovery chain ChatGPT depends on (401 `WWW-Authenticate resource_metadata` →
-protected-resource metadata → Cognito OIDC discovery). All three checks must be `[ok]` before
-touching ChatGPT. (No CLI? Both values are on your CloudFormation stack's **Outputs** tab -
-`McpEndpoint` and `ChatGPTClientId` - but you'll still need the CLI once for step 4.) (No CloudFront proxy or extra infra is needed - Bedrock AgentCore serves the
+Open your CloudFormation stack's **Outputs** tab and copy the `McpEndpoint` and `ChatGPTClientId`
+values. If you have the AWS CLI, `substrate/wire-chatgpt.sh` prints both and verifies the auth
+discovery chain (a 401 `WWW-Authenticate resource_metadata` response, protected-resource metadata,
+then Cognito OIDC discovery); all three checks must report `[ok]`. You need the CLI regardless for
+step 4. (No CloudFront proxy or extra infra is needed - Bedrock AgentCore serves the
 RFC 9728 metadata natively.)
 
-### 2. Enable Developer mode
+## 2. Enable Developer mode
 
 ChatGPT web → **Settings → Apps** (a.k.a. Apps & Connectors) → **Advanced settings** →
 toggle **Developer mode** ON.
@@ -40,7 +40,7 @@ Note the second toggle, **"Enforce CSP in developer mode"**: OFF (default) gives
 unrestricted network and shows a `CSP off` badge on every widget; ON applies the production CSP.
 Leave it OFF for first bring-up; retest with it ON before trusting any CSP-dependent behavior.
 
-### 3. Create the app (connector)
+## 3. Create the app (connector)
 
 Settings → Apps → Advanced settings → **Create app**:
 
@@ -72,7 +72,7 @@ metadata chain from step 1 working):
 
 Check **"I understand and want to continue"** → **Create**.
 
-### 4. Register the per-connector callback in Cognito
+## 4. Register the per-connector callback in Cognito
 
 ```bash
 substrate/wire-chatgpt.sh --register-callback 'https://chatgpt.com/connector/oauth/<id-from-step-3>'
@@ -86,20 +86,20 @@ SAME callback id, so re-running this command is often a no-op - run it anyway, i
 > Redeployed or replaced the whole stack? The connector also pins the old stack's OAuth client and
 > endpoint - see the reconnect checklist at the bottom of this page before debugging anything else.
 
-### 5. Connect (OAuth)
+## 5. Connect
 
 On the app's page click **Connect** → **Sign in with pairputer** → a popup opens the Cognito hosted
 UI → sign in with your pairputer user (for example, the super-admin email and password). The popup closes and
 the app shows **Connected**.
 
-### 6. Pull the tools
+## 6. Pull the tools
 
 On the app's page click **Refresh** (next to Information). "Actions refreshed" should appear and
 the Actions list should show the platform tools (`play_capsule`, `freeze`, `thaw`, `trash_microvm`,
 `pairputer_session`, `list_capsules`, …) plus any capsule cartridge tools (`computer_use_desktop__*`).
 Re-click Refresh any time the server's tool surface changes - ChatGPT does not re-pull on its own.
 
-### 7. Play
+## 7. Open the Workbench
 
 New chat → type:
 
@@ -115,6 +115,18 @@ the exact same session.
 app automatically.
 
 ---
+
+---
+
+# Reference
+
+The rest of this page is background for maintainers: the bugs we hit, host capabilities, and a
+regression checklist. You do not need any of it to connect ChatGPT.
+
+**Status:** web and desktop verified end-to-end (2026-07-08/09) - OAuth, tools, 30 FPS video,
+input, audio, freeze/thaw, and PiP pop-out (web floating, desktop docked). Distribution target is
+private **Developer Mode connectors**; an app-store submission (dedicated widget domain, OpenAI
+review) is a documented follow-up. Outstanding: CSP-ON retest.
 
 ## Walls we hit (so you don't)
 
