@@ -85,7 +85,7 @@ Deploy-time helper Lambdas run for seconds during stack create/update - their ru
 | Resource | Type | Purpose | Source |
 |---|---|---|---|
 | VPC + IGW + 4 subnets + route tables | `AWS::EC2::*` | dedicated VPC (2 public + 2 private subnets) | [relay-network.yaml#L48](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L48) |
-| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` etc. | private-subnet egress for ~$3/mo instead of a $32/mo NAT Gateway | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
+| fck-nat instance (`t4g.nano`) + ENI + EIP + SG + role | `AWS::EC2::Instance` and related resources | private-subnet egress for ~$3/mo instead of a $32/mo NAT Gateway | [#L215](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L215) |
 | NAT Gateway + EIP | `AWS::EC2::NatGateway` | **only** in `CreateVpcNatGateway` mode (not the default) | [#L144](https://github.com/somoore/pairputer/blob/main/substrate/cloudformation/nested/relay-network.yaml#L144) |
 
 ### RelayStack - the streaming data plane

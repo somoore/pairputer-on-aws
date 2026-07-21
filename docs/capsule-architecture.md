@@ -12,7 +12,7 @@ pairputer substrate. This supersedes the single-capsule-baked-into-the-root-stac
    cartridge. A capsule stack builds its `AWS::Lambda::MicrovmImage` and registers itself. Deploying a new
    capsule = deploy its stack; removing one = delete its stack. **No substrate rebuild, ever.**
 3. **The MCP server discovers capsules by TAG, not by a baked-in registry.** `list_capsules` enumerates
-   MicroVM images tagged as pairputer capsules (e.g. `pairputer:capsule=true` + `pairputer:capsule-id`,
+   MicroVM images tagged as pairputer capsules (for example, `pairputer:capsule=true` + `pairputer:capsule-id`,
    `pairputer:capsule-name`, and a pointer to the capsule's manifest). It lists/describes ONLY
    pairputer-tagged capsule images - never MicroVM images created outside/for-use-outside pairputer.
    Tag-scoped discovery is what makes it dynamic without redeploying the control plane.
@@ -22,7 +22,7 @@ pairputer substrate. This supersedes the single-capsule-baked-into-the-root-stac
 - **Capsule lifecycle ⊥ platform lifecycle.** The friction that once forced a full substrate rebuild to
   test one capsule change (2026-07-03) disappears - capsules come and go independently.
 - **N capsules, no CloudFormation loops.** The "CFN has no loops" problem dissolves: there's no N-in-one
-  template. Each capsule is one stack; the substrate just needs to grant the control plane permission to
+  template. Each capsule is one stack; the substrate only needs to grant the control plane permission to
   discover + control any pairputer-tagged image, and the MCP reads the tag namespace at runtime.
 - **Third parties ship capsules** as standalone stacks against a deployed substrate - the real
   "bring your own capsule" promise.
@@ -97,7 +97,7 @@ measured numbers, the Workbench's reference split, and the capsule-author checkl
 **Per-capsule manifest → per-capsule tool registration (DONE 2026-07-03):**
 - The MCP now registers the UNION of Tier 2 tools across EVERY capsule known at startup - the env-seeded
   bundled capsule PLUS each tag-discovered capsule, whose manifest is read from its SSM param
-  (`_read_manifest_from_ssm`) via the `pairputer:capsule-manifest-ssm` tag. `_all_capsule_manifests()`
+  (`_read_manifest_from_ssm`) using the `pairputer:capsule-manifest-ssm` tag. `_all_capsule_manifests()`
   returns `{image_id: manifest}`; the registration loop registers each capsule's namespaced tools, each
   **bound to its own capsule's image_id** (so the agent needn't pass it) and screened against **that
   capsule's own** `safety.sensitivePatterns`. Tool-name dedup: first-declared wins, so a name collision
@@ -117,7 +117,7 @@ measured numbers, the Workbench's reference split, and the capsule-author checkl
   `list_capsules` showed the correct manifest name; the capsule's typed tools drove the live session.
   Session tokens carry a per-capsule `agentInteract` claim.
 - Deploy-path bugs fixed en route: override-validator preview-SDK hang (lazy require), suspended-VM
-  image pin invisible to ListMicrovms (terminate via session-table id), MicroVM tag charset (sanitize).
+  image pin invisible to ListMicrovms (terminate using the session-table id), MicroVM tag charset (sanitize).
 - **Hot-add SHIPPED (2026-07-04)**: `capsule_invoke(capsule_id, tool, args)` resolves the capsule's
   manifest AT CALL TIME (tag discovery + SSM, cached) with the same gates as registered tools - a
   cartridge inserted mid-session is drivable immediately. Typed `<capsule>__<verb>` tools still register
@@ -186,4 +186,4 @@ defaulted to `objective: survive`. The new brain was running the whole time. Dis
   reads it per capsule at runtime, so a manifest change never redeploys the control plane.
 - **Batteries-included 1-click - RESOLVED:** the substrate bundles the **Pairputer Workbench** by default
   (`BundleReferenceCapsule=true`) through the same cartridge template, so "bundled" is no longer a
-  special path - just a cartridge the root stack happens to deploy for you.
+  special path - it is a cartridge the root stack happens to deploy for you.

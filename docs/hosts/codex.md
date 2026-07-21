@@ -8,7 +8,7 @@ new-host work doesn't re-learn them (sources: CLAUDE.md walls, blog2.md).
 - **Bridge:** `window.openai` (Apps SDK dialect). Reads `openai/outputTemplate` on tools; resource
   mime `text/html;profile=mcp-app`.
 - **No cross-origin ANYTHING from the widget** - fetch, EventSource, WebSocket all blocked before
-  CSP (`connectDomains` not honored). The relay player iframe (frame escape hatch via
+  CSP (`connectDomains` not honored). The relay player iframe (frame escape hatch using
   `frameDomains`) is the only data path. Input rides batched `POST /input` because `connect-src`
   allows only `https://` (wall #10).
 - **Inline display mode only.** `requestDisplayMode` returns `inline`; the widget's granted-mode
@@ -43,7 +43,7 @@ block - real multi-line TOML.
 
 > **Newline gotcha (cost a real debugging session):** the AWS CloudFormation console flattens the
 > copied `McpFullEndpoint` value onto ONE line. Pasting that is invalid TOML, so Codex fails to parse
-> `config.toml` and silently shows NO MCP connectors at all (not just pairputer). Put each
+> `config.toml` and silently shows NO MCP connectors at all (not only pairputer). Put each
 > `key = value` and each `[…]` table header back on its own line. The invite email now warns about this.
 
 > **Codex ↔ ChatGPT surface (observed 2026-07-17, mechanism unverified):** with the pairputer block in

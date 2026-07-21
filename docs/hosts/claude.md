@@ -2,7 +2,7 @@
 
 Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-09; re-verified on a fresh
 1-click stack 2026-07-17 and 2026-07-20)** - OAuth, tools (incl. tag-discovered capsule cartridge
-tools), widget render, direct-connect video + audio, keyboard/mouse, freeze/thaw/launch via widget
+tools), widget render, direct-connect video + audio, keyboard/mouse, freeze/thaw/launch using the widget
 buttons, fullscreen. No PiP (Claude does not offer it).
 
 The first MCP-Apps-standard host (SEP-1865) - no `window.openai`, no iframe player. Adding it
@@ -42,7 +42,7 @@ claude.ai → **Settings → Customize → Connectors** → **Add** (top-right) 
 
 Click **Add**.
 
-> Verified 2026-07-17 via a fresh 1-click deploy: the modal wants exactly Name + URL + Client ID (no
+> Verified 2026-07-17 using a fresh 1-click deploy: the modal wants exactly Name + URL + Client ID (no
 > secret); Connect launches the Cognito login at
 > `pairputer-<accountid>.auth.<region>.amazoncognito.com` with `redirect_uri=…/api/mcp/auth_callback`
 > already accepted.
@@ -100,7 +100,7 @@ Claude desktop and mobile apps automatically.
   decode + batched `POST /input` engine IN-WIDGET (`makeDirectPlayer` in app.html), hitting the
   relay's CORS-open (`access-control-allow-origin: *`) SSE/POST endpoints directly - no player
   iframe. An iframe that fails to boot in 6s auto-falls-back to direct.
-- **Display modes:** inline + fullscreen (granted live via `hostContext.availableDisplayModes`);
+- **Display modes:** inline + fullscreen (granted live using `hostContext.availableDisplayModes`);
   **no PiP**. The profile declares `()` and the widget merges what the host actually grants.
 - **Widget-initiated `callTool` works** (post-handshake) - token refresh and the
   Freeze/Thaw/Trash buttons round-trip normally. The wall-#17 Codex limitation does not apply.
@@ -125,10 +125,10 @@ Claude desktop and mobile apps automatically.
 
 1. Fresh chat → `play_capsule` → widget **reveals** (not stuck hidden) and renders from the
    delivered tool-result.
-2. Video + audio stream via direct-connect (canvas, not an iframe); keyboard/mouse reach the
+2. Video + audio stream through direct-connect (canvas, not an iframe); keyboard/mouse reach the
    capsule through `POST /input`.
 3. Fullscreen granted and reversible; no PiP offered.
 4. Freeze → suspended overlay; reopen conversation → VM stays suspended. Thaw → stream resumes.
-5. Session >15 min → in-widget token refresh via post-handshake `callTool` (no reconnect overlay).
+5. Session >15 min → in-widget token refresh using post-handshake `callTool` (no reconnect overlay).
 6. After any widget redeploy: old chat may show the stale widget (expected); new chat shows the
    new one.

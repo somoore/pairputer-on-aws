@@ -118,7 +118,7 @@ capsule uses) and `image-copy` (private-mode verify-and-copy) when applicable.
 
 **Control plane.** The chat host authenticates to Cognito (authorization-code + PKCE; Codex keeps its
 tokens in the OS keyring) and calls the MCP server on Bedrock AgentCore. A tool call returns an opening payload so the widget
-renders immediately; on open it calls `pairputer_session`, and AgentCore - via its IAM execution role,
+renders immediately; on open it calls `pairputer_session`, and AgentCore - using its IAM execution role,
 no static keys - loads/creates the caller's DynamoDB session, runs/resumes the MicroVM, scales the
 Fargate relay to 1, waits for a healthy ALB target, and returns a short-lived HMAC relay token plus
 CloudFront signed-URL params.
@@ -219,7 +219,7 @@ the image `503` until the desktop renders *and* an input self-test passes - with
 ## Security posture (summary)
 
 No static AWS credentials leave the laptop (OAuth PKCE only). The data plane is a private VPC behind
-CloudFront + WAF; the internal ALB accepts only CloudFront (via the CloudFront-VPCOrigins service SG +
+CloudFront + WAF; the internal ALB accepts only CloudFront (using the CloudFront-VPCOrigins service SG +
 origin secret). Images are cosign-signed with SLSA provenance, digest-pinned, and independently
 verifiable ([`scripts/verify-images.sh`](../scripts/verify-images.sh)).
 

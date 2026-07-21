@@ -21,7 +21,7 @@ at run/resume. But the MicroVM runs with `autoResumeEnabled: true`, and the work
 video/audio stream - so the platform idle timer effectively never trips while a viewer is connected (any
 traffic re-wakes the VM). Net effect: the box does NOT auto-freeze on its own when a human walks away; it
 only suspends on an explicit **Freeze** (which the relay suspend-guard now makes reliable - walls #21/#22).
-Real proactive idle-suspend needs **app-level idle detection** (track last human input via the input
+Real proactive idle-suspend needs **app-level idle detection** (track last human input using the input
 arbiter; auto-invoke `freeze()` after the chosen window when no input AND no active drive). Deferred by
 choice; the guard + explicit Freeze is the shipped behavior. See [walls #21/#22](walls-and-lessons.md).
 
@@ -34,7 +34,7 @@ usable shell:
   VS Code · Terminal) started from `session.sh`. **Run it with `python3` (system 3.9), NEVER
   `python3.11`** - PyGObject (`gi`) is only installed for 3.9; 3.11 has no `gi` and the launcher
   crash-loops invisibly (wall #24). `python-xlib` (3.11-only, used for the `_NET_WM_STRUT` reservation)
-  is imported defensively, so the strut is simply skipped on 3.9 and the dock still shows via its DOCK
+  is imported defensively, so the strut is skipped on 3.9 and the dock still shows through its DOCK
   hint + keep_above.
 - **The browser NEVER auto-opens.** Chromium is not launched at boot and readiness does not gate on it
   (`chromium_cdp`/`chromium_visible` are informational only). It starts ONLY on demand - dock Browser/VS
@@ -45,7 +45,7 @@ usable shell:
   root-owned `/var/log/pairputer-session.log` (session.sh stderr + an Xlib window-geometry dump). This is
   how the `gi` crash-loop was finally found - reach for it before blind-iterating image rebuilds.
 
-Open follow-up: code-server (VS Code in the browser) shows a WebSocket 1006 error when reached via the
+Open follow-up: code-server (VS Code in the browser) shows a WebSocket 1006 error when reached through the
 `pairputer-preview.invalid` http proxy domain - the browser treats it as an insecure context. Functional
 enough to render, but the live WebSocket features degrade; not yet chased.
 
@@ -101,20 +101,20 @@ security invariant to make the deployed path pass.
 - **Slim advertised surface**: exactly **12 of 33** tools registered in `tools/list` (observe,
   screenshot, computer_action, ground_target, drive_task, task_status, run_command,
   workspace_read/write/upload, browser_open, browser_query). The other 21 carry `advertise: false`
-  in the manifest - identical gates, callable via `capsule_invoke` (`capsule_id`, namespaced or bare
-  tool name), discoverable via `capsule_metadata`. A contract test pins the advertised set. This is a
+  in the manifest - identical gates, callable through `capsule_invoke` (`capsule_id`, namespaced or bare
+  tool name), discoverable through `capsule_metadata`. A contract test pins the advertised set. This is a
   per-turn context-cost optimization only; no capability changed.
 - Deploy walls fixed en route: manifests over the 8 KiB SSM cap are now **chunked** across immutable
   `/partN` params behind a digest-chained `chunked:v1:` header (deploy-capsule.sh writes, server.py
   reassembles + verifies); the pinned BtbN ffmpeg autobuild had been **pruned upstream** (404 on every
   cold-cache build) and is now mirrored in the public launch bucket, sha256-pinned, for BOTH capsules.
-- Headless production E2E (M2M principal): cold boot → RUNNING ~6s; video SSE ~42 KiB/s via CloudFront
+- Headless production E2E (M2M principal): cold boot → RUNNING ~6s; video SSE ~42 KiB/s through CloudFront
   after ~30s in-VM warmup; all three dialects live; freeze → SUSPENDED with stale-token 403; thaw ~5s
   with workspace state surviving suspend/resume; `capsule_approve` refuses the headless caller (fails
   closed); trash → TERMINATED.
 - File transfer verified on cloud VMs twice: 293 KB binary, 3 chunks, 6.9s, byte-identical; and real
   Codex (gpt-5.5) composing the full `workspace_upload` envelope from schema alone, then verifying the
-  sha via the hidden `workspace_describe` through `capsule_metadata` → `capsule_invoke` discovery
+  sha using the hidden `workspace_describe` through `capsule_metadata` → `capsule_invoke` discovery
   (SLIM-PASS).
 - Agent-cursor attribution is truthful under sustained agent driving (receipts + `observe` both report
   owner=agent, zero spurious human-takeovers/drops, ~1.5s decay to idle) - three live-found races fixed

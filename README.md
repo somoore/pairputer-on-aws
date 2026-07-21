@@ -23,7 +23,7 @@ The bundled reference capsule is the **Pairputer Workbench**: a disposable, resu
 - **Runs in *your* AWS account.** No third-party SaaS holds your session, and no static credentials leave your machine.
 - **True 1-click.** Signed, digest-pinned public images plus a public capsule build context. Nothing to build locally.
 - **Secure by construction.** OAuth (Cognito PKCE), a private VPC data plane behind CloudFront + WAF, and cosign-signed images with SLSA provenance you can verify yourself.
-- **Bring your own workload.** The Workbench is just the default. The substrate is capsule-agnostic, and any capsule deploys as a cartridge with `substrate/deploy-capsule.sh <capsule-dir>`.
+- **Bring your own workload.** The Workbench is the default. The substrate is capsule-agnostic, and any capsule deploys as a cartridge with `substrate/deploy-capsule.sh <capsule-dir>`.
 
 ## Deploy it
 
@@ -79,7 +79,7 @@ substrate/deploy.sh   # needs a running Docker daemon; builds from source into y
 ```
 
 This is a **contributor tool, not a second way to deploy** - it stands up the same stack as the 1-click,
-just from images you built. See [`substrate/README.md`](./substrate/README.md) and
+only the images come from your source build. See [`substrate/README.md`](./substrate/README.md) and
 [`docs/local-dev-loop.md`](./docs/local-dev-loop.md) for the inner loop, image modes, and options.
 
 ## Learn more

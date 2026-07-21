@@ -113,7 +113,7 @@ SSE streams stayed live through both transitions (30 FPS continuous, no remount 
 The widgetState boot fallback remains in place for hosts/platforms that DO remount (Android bug).
 
 ### PROBE-9 FINAL - Claude streams the capsule live: ✅ (2026-07-09, human-confirmed)
-Full parity: widget renders + reveals, and video/audio/keyboard/mouse work via the direct-connect
+Full parity: widget renders + reveals, and video/audio/keyboard/mouse work through the direct-connect
 in-widget player (Claude blocks frame-src, so no iframe). Root-caused entirely in a local host
 harness. See docs/hosts/claude.md for the full fix chain (nested meta, appInfo handshake,
 tools/call gating, direct-connect streaming + SSE self-heal + iframe→direct fallback).
@@ -123,7 +123,7 @@ Reloading the conversation re-mounts the widget but may serve CACHED resource HT
 bust: Settings → Apps → pairputer → **Refresh** (bumps the app version, "Actions refreshed"), THEN
 reload the conversation.
 ### PROBE-9 - Claude renders the standard resource: ✅ WIDGET REVEALS (2026-07-09)
-Root-caused via a local host harness (scratchpad/host.html): the reveal was blocked by the widget's
+Root-caused using a local host harness (scratchpad/host.html): the reveal was blocked by the widget's
 boot tools/call racing the ui/initialize handshake ("AppBridge received tools/call before
 ui/notifications/initialized" → host refuses to reveal). Fixed (gate opens only after 'initialized';
 standard bridge renders from the tool-result payload, no boot tools/call). Widget iframe confirmed

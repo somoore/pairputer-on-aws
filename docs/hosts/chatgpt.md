@@ -2,7 +2,7 @@
 
 Status: **web AND desktop WORKING end-to-end (human-confirmed 2026-07-08/09)** - OAuth, tools
 (incl. tag-discovered capsule cartridge tools), widget render, 30 FPS video through the relay
-player iframe, keyboard/mouse/audio, gameplay, freeze/thaw/launch via widget buttons
+player iframe, keyboard/mouse/audio, gameplay, freeze/thaw/launch using the widget buttons
 (widget-initiated callTool works on ChatGPT), PiP pop-out on web (floating) and desktop (docked
 panel with fill layout + stream-stall auto-recovery). Outstanding: CSP-ON retest.
 
@@ -90,7 +90,7 @@ SAME callback id, so re-running this command is often a no-op - run it anyway, i
 ### 5. Connect (OAuth)
 
 On the app's page click **Connect** → **Sign in with pairputer** → a popup opens the Cognito hosted
-UI → sign in with your pairputer user (e.g. the super-admin email + password). The popup closes and
+UI → sign in with your pairputer user (for example, the super-admin email and password). The popup closes and
 the app shows **Connected**.
 
 ### 6. Pull the tools
@@ -138,10 +138,10 @@ app automatically.
 - **Widget-initiated `callTool` WORKS** (boot state reads, Launch/Thaw/Freeze buttons, token
   refresh). The Codex wall #17 does not apply.
 - **Direct outbound networking from the widget** to `openai/widgetCSP.connect_domains` origins is
-  documented (fetch/SSE/WebSocket) - unverified by us; we kept the relay player iframe (works via
+  documented (fetch/SSE/WebSocket) - unverified by us; we kept the relay player iframe (works through
   `frameDomains`, zero player duplication). Direct-connect is a possible later simplification
   (needs CORS on the relay).
-- **Display modes:** inline / fullscreen / **PiP** via `window.openai.requestDisplayMode({mode})` - negotiated, user-gesture-only, PiP → fullscreen on mobile; transitions may REMOUNT the widget
+- **Display modes:** inline / fullscreen / **PiP** using `window.openai.requestDisplayMode({mode})` - negotiated, user-gesture-only, PiP → fullscreen on mobile; transitions may REMOUNT the widget
   (verify with PROBE-8). Phase 4 wires the Pop-out UX.
 - **~60 s tool budget** (vs Codex ~25 s).
 
