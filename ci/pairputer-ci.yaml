@@ -28,6 +28,16 @@ Parameters:
     Default: "1303487311"
     Description: >-
       GitHub numeric repository id (somoore/pairputer). Find via: gh api repos/OWNER/REPO --jq .id
+  LaunchBucketName:
+    Type: String
+    Default: pairputer-launch
+    Description: Public launch bucket the publish-launch CI workflow writes the 1-click template + assets to.
+  ThirdPartyMirrorBucket:
+    Type: String
+    Default: sympatry-launch-932930471665
+    Description: >-
+      Source bucket the FFmpeg mirror is copied FROM (read-only). publish-launch.sh copies
+      third-party/ffmpeg/* out of here into the launch bucket so a fresh launch bucket is self-contained.
   McpRepoName:
     Type: String
     Default: pairputer-mcp
@@ -121,6 +131,34 @@ Resources:
                 Condition:
                   StringEquals:
                     aws:RequestedRegion: us-east-1   # ECR Public control plane is us-east-1 only
+        # Publish the 1-click launch assets to the public launch bucket. This is what keeps the S3
+        # 1-click template in lockstep with main (the publish-launch workflow assumes THIS role).
+        # Scoped to the one launch bucket; read on the third-party mirror source for the FFmpeg copy.
+        - PolicyName: LaunchPublishScoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteLaunchBucket
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:CreateBucket
+                  - s3:PutBucketPublicAccessBlock
+                Resource:
+                  - !Sub "arn:aws:s3:::${LaunchBucketName}"
+                  - !Sub "arn:aws:s3:::${LaunchBucketName}/*"
+              - Sid: ReadThirdPartyMirrorSource
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ThirdPartyMirrorBucket}"
+                  - !Sub "arn:aws:s3:::${ThirdPartyMirrorBucket}/*"
 
   McpRepo:
     Type: AWS::ECR::PublicRepository

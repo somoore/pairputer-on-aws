@@ -1,0 +1,66 @@
+name: publish-launch
+
+# Keep the public 1-click launch bucket (s3://pairputer-launch) in lockstep with main.
+#
+# Runs substrate/publish-launch.sh in a clean CI runner - the SAME script used locally - so the
+# packaged CloudFormation template, the Workbench build-context zip, the brand email logos, and the
+# third-party FFmpeg mirror are all republished whenever the source of any of them changes on main.
+# Auth to AWS is GitHub OIDC (no stored keys), assuming the pairputer-ci push role, whose trust is
+# scoped to exactly this repo on refs/heads/main.
+#
+# Prereqs (one-time, maintainer): deploy ci/pairputer-ci.yaml (grants the push role S3 write to the
+# launch bucket) and set the AWS_PUBLISH_ROLE_ARN repo variable to its PushRoleArn output.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'substrate/cloudformation/**'
+      - 'capsules/nested/capsule-stack.yaml'
+      - 'capsules/computer-use-desktop/**'
+      - 'brand/**'
+      - 'substrate/publish-launch.sh'
+      - 'substrate/package-capsule-image.sh'
+      - '.github/workflows/publish-launch.yml'
+  workflow_dispatch:            # manual re-publish button
+
+# Never let two publishes race the bucket; a newer main should win.
+concurrency:
+  group: publish-launch
+  cancel-in-progress: true
+
+permissions:
+  id-token: write               # mint the GitHub OIDC token for AWS auth
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ROLE_ARN: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+
+jobs:
+  publish:
+    name: publish 1-click launch assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Publish launch assets
+        run: substrate/publish-launch.sh
+
+      - name: Verify the published template is current
+        run: |
+          set -euo pipefail
+          # Prove the just-published root template resolves + carries the current markers, so a green
+          # run is real verification, not just "the script exited 0".
+          aws s3 cp "s3://pairputer-launch/templates/pairputer.yaml" /tmp/pub.yaml
+          for marker in "CapsuleImageStack" "McpFullEndpoint" "pairputer-workbench"; do
+            grep -q "$marker" /tmp/pub.yaml || { echo "published template missing: $marker"; exit 1; }
+          done
+          grep -qi "doom" /tmp/pub.yaml && { echo "published template still references doom"; exit 1; } || true
+          echo "Published launch template verified current."
