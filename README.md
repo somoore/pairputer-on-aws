@@ -95,3 +95,4 @@ in dependency order. Nothing is left running, so the bill stops.
 - [`docs/1-click-advanced.md`](./docs/1-click-advanced.md): every 1-click launch parameter and what it does
 - [`docs/1-click-cost.md`](./docs/1-click-cost.md): every resource + IAM role + cost model
 - [`SECURITY.md`](./SECURITY.md): the end-to-end supply-chain and trust model
+- [`docs/credits.md`](./docs/credits.md): the open-source projects and services pairputer is built on
