@@ -356,11 +356,12 @@ CloudFront + WAF; the internal ALB accepts only CloudFront (using the CloudFront
 origin secret). Images are cosign-signed with SLSA provenance, digest-pinned, and independently
 verifiable ([`scripts/verify-images.sh`](../scripts/verify-images.sh)).
 
-**Auth (defense-in-depth, 2026-07-12 audit):** AgentCore's `CustomJWTAuthorizer` verifies the Cognito
-JWT (signature/issuer/expiry/client/scope) before a request reaches the container; `server.py::_verify_jwt`
-then INDEPENDENTLY re-verifies the RS256 signature + `iss` + `exp` against Cognito's JWKS inside the
-container, so the tenant model does not rely SOLELY on AgentCore being the only ingress (fail-closed).
-The CloudFront signed-URL gate is MANDATORY: `CloudFrontKeyGroupId` is required and `TrustedKeyGroups`
-is unconditional, so an empty value can no longer silently disable the edge signed-URL requirement.
+Auth is verified in depth: AgentCore's `CustomJWTAuthorizer` verifies the Cognito JWT (signature,
+issuer, expiry, client, and scope) before a request reaches the container, and `server.py::_verify_jwt`
+then independently re-verifies the RS256 signature, `iss`, and `exp` against Cognito's JWKS inside the
+container, fail-closed, so the tenant model does not rely solely on AgentCore being the only ingress.
+The CloudFront signed-URL gate is mandatory: `CloudFrontKeyGroupId` is required and `TrustedKeyGroups`
+is unconditional, so an empty value cannot silently disable the edge signed-URL requirement.
 
-Full detail in [`../SECURITY.md`](../SECURITY.md).
+For the full layered model, see [Defense in depth, L1 through L7](#defense-in-depth-l1-through-l7) above
+and [`../SECURITY.md`](../SECURITY.md).
