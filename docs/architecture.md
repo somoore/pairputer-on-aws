@@ -78,7 +78,8 @@ flowchart TB
 
 ---
 
-## Deploy-time shape
+<details>
+<summary><b>Deploy-time shape</b></summary>
 
 The root template (`substrate/cloudformation/pairputer.yaml`) composes nested stacks. Two parameters
 change what gets built:
@@ -113,9 +114,10 @@ cartridge capsule uses) and `image-copy` (private-mode verify-and-copy) when app
   into the Cognito public client's callback URLs at deploy time. So a 1-click user needs **zero AWS
   credentials** (no `redirect_mismatch`, no manual Cognito edit) and the first `codex mcp login` works.
 
----
+</details>
 
-## Planes in detail
+<details>
+<summary><b>Planes in detail</b></summary>
 
 **Control plane.** The chat host authenticates to Cognito (authorization-code + PKCE; Codex keeps its
 tokens in the OS keyring) and calls the MCP server on Bedrock AgentCore. A tool call returns an opening payload so the widget
@@ -136,9 +138,10 @@ For the full hop-by-hop transport/port/auth breakdown of both planes (headless t
 streaming chain), OSI-mapped with the encrypted-vs-cleartext boundaries and residual gaps, see
 [`data-path-osi.md`](./data-path-osi.md).
 
----
+</details>
 
-## How the widget renders in the chat
+<details>
+<summary><b>How the widget renders in the chat</b></summary>
 
 The interactive panel you see in the chat is an **MCP-UI app**, not a normal iframe the model opens.
 The MCP server publishes the widget HTML as a single MCP resource, and the chat host renders it inline
@@ -162,9 +165,10 @@ WebCodecs decode and batches input. The exception is Claude: its sandbox allows 
 its own DOM instead of embedding the player. If the player iframe fails to boot within six seconds on
 any host, the widget falls back to this direct mode automatically.
 
----
+</details>
 
-## Tools the MCP server and capsule expose
+<details>
+<summary><b>Tools the MCP server and capsule expose</b></summary>
 
 There are two tiers of tools. The **MCP server** exposes a small, fixed set of platform tools that
 every capsule shares. Each **capsule** additionally declares its own typed tools, which the server
@@ -209,9 +213,10 @@ Consequential actions that reach outside the VM (running a command, submitting a
 an explicit, single-use approval token. In-VM effects run freely, because the VM is disposable. A
 stream-only capsule declares no tools, and the panel is then a live desktop with no AI actuation.
 
----
+</details>
 
-## Auth and token flow
+<details>
+<summary><b>Auth and token flow</b></summary>
 
 Two independent grants: a long-lived, revocable **identity** (Cognito) gates the control plane; a
 short-lived, session-bound **capability** (a 15-min HMAC token + matching CloudFront policy) gates the
@@ -250,9 +255,10 @@ sequenceDiagram
     A-->>W: fresh 15-min relay token
 ```
 
----
+</details>
 
-## How the MCP server is hosted on Bedrock AgentCore
+<details>
+<summary><b>How the MCP server is hosted on Bedrock AgentCore</b></summary>
 
 The MCP server does not run on a server you manage. It runs as a **Bedrock AgentCore Runtime**, a
 managed, serverless host for agent and MCP containers. You hand AWS a container image; AgentCore
@@ -293,9 +299,10 @@ In **Public image mode** the runtime is created by an API-backed custom resource
 resource rejects `public.ecr.aws` URIs; the AgentCore *API* accepts them. In **Private image mode** the
 native resource is used. Either way the runtime configuration above is identical.
 
----
+</details>
 
-## Cognito and OAuth, low-level
+<details>
+<summary><b>Cognito and OAuth, low-level</b></summary>
 
 Identity is a Cognito user pool created fresh in your account. No identity is shared with the project,
 and no secret leaves your account. The chat host authenticates with **OAuth 2.0 authorization-code plus
@@ -355,9 +362,10 @@ Every MCP call's bearer token is verified twice, independently:
    (`tenant_id = sha256(iss:sub)`) never trusts unverified claims, even if a request somehow reached
    the container without passing the authorizer.
 
----
+</details>
 
-## Defense in depth, L1 through L7
+<details>
+<summary><b>Defense in depth, L1 through L7</b></summary>
 
 Security is layered so that no single control is the only thing standing between an attacker and the
 capsule. Reading from the network up to the application:
@@ -381,9 +389,10 @@ revocable **identity** (Cognito, verified twice) gates the control plane, and a 
 session-bound **capability** (HMAC + matching CloudFront policy) gates the data plane. The two are
 independent, so compromising one grant does not hand over the other.
 
----
+</details>
 
-## Lifecycle: Freeze and Thaw
+<details>
+<summary><b>Lifecycle: Freeze and Thaw</b></summary>
 
 - **Freeze:** the widget stops streams and drains the relay, then MCP `freeze` calls `SuspendMicrovm`
   only after atomically rotating the session and owner epoch (so stale tokens cannot regain authority),
@@ -400,9 +409,10 @@ independent, so compromising one grant does not hand over the other.
   for `RUNNING`, and only then starts streams.
 - **Trash:** drains, terminates the caller's MicroVM, clears the session mapping; a recovery path.
 
----
+</details>
 
-## Inside the capsule
+<details>
+<summary><b>Inside the capsule</b></summary>
 
 The capsule supervises Xvnc (`:1`), the capsule services, and the shared desktop (browser, VS Code,
 terminal, file manager). It exposes three data ports: **video** `:6903` (ffmpeg to H.264), **audio**
@@ -420,9 +430,10 @@ discovers it at runtime by tag, so adding or removing a capsule needs no control
 the image `503` until the desktop renders *and* an input self-test passes. With `InputSelftestEnforce=true`
 (default) a build with dead input **fails** rather than snapshotting a broken capsule.
 
----
+</details>
 
-## Security posture (summary)
+<details>
+<summary><b>Security posture (summary)</b></summary>
 
 No static AWS credentials leave the laptop (OAuth PKCE only). The data plane is a private VPC behind
 CloudFront + WAF; the internal ALB accepts only CloudFront (using the CloudFront-VPCOrigins service SG +
@@ -438,3 +449,5 @@ is unconditional, so an empty value cannot silently disable the edge signed-URL 
 
 For the full layered model, see [Defense in depth, L1 through L7](#defense-in-depth-l1-through-l7) above
 and [`../SECURITY.md`](../SECURITY.md).
+
+</details>
