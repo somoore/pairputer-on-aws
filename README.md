@@ -32,7 +32,7 @@ signed public images.
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https://pairputer-launch.s3.amazonaws.com/templates/pairputer.yaml&stackName=pairputer)
 
-Click the button, enter **one input: your email address** (it becomes the super-admin account and receives the invite), and deploy. Everything else defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account.
+Click the button, enter **one input: your email address** (it becomes the super-admin account and receives the invite), and deploy. Everything else defaults to pairputer's signed public images and the Pairputer Workbench capsule. Behind the scenes it stands up Cognito, the MCP control plane (Bedrock AgentCore), a private CloudFront-fronted data plane, and builds the Workbench MicroVM image in your account. To customize the deploy (private images, your own VPC, durable storage, region), every parameter is documented in [`docs/1-click-advanced.md`](./docs/1-click-advanced.md).
 
 After it finishes, you get an **admin invite email** with your temporary password. Then add the pairputer connector in ChatGPT (web) and Claude (web) using your stack's `McpEndpoint` output (see [`docs/chatgpt.md`](./docs/chatgpt.md) / [`docs/claude.md`](./docs/claude.md)) and play.
 
@@ -70,5 +70,6 @@ in dependency order. Nothing is left running, so the bill stops.
 ## Learn more
 
 - [`docs/architecture.md`](./docs/architecture.md): how the pieces fit (diagram)
+- [`docs/1-click-advanced.md`](./docs/1-click-advanced.md): every 1-click launch parameter and what it does
 - [`docs/1-click-cost.md`](./docs/1-click-cost.md): every resource + IAM role + cost model
 - [`SECURITY.md`](./SECURITY.md): the end-to-end supply-chain and trust model
