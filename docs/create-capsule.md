@@ -172,3 +172,32 @@ tears down, so deletion never wedges.
   together, including the tools the MCP server and capsule expose.
 - [docs/1-click-advanced.md](./1-click-advanced.md): the `BundleReferenceCapsule` and capsule-image
   launch parameters.
+
+## Easter egg: load the Agent DOOM cartridge
+
+The repo ships a second, ready-made capsule you can drop into a running substrate: **Agent DOOM**. It is
+a Tier 1 capsule that streams DOOM and adds an in-VM agent bridge, so the AI can play alongside you. It
+is the reference for a game or single-application capsule, and it doubles as a working example of every
+step on this page.
+
+With the substrate deployed, add it as a cartridge:
+
+```bash
+substrate/deploy-capsule.sh agent-doom --name "Agent DOOM" --id agent-doom
+```
+
+This builds and tags the `agent-doom` MicroVM image and stages its manifest, exactly like any other
+capsule. Because Agent DOOM declares tools, restart the MCP runtime once after the deploy so the server
+registers them (or deploy with `substrate/deploy-capsule-and-rebind.sh agent-doom`, which does the
+runtime bounce for you).
+
+Open it from a fresh chat:
+
+> Use the pairputer app to open Agent DOOM (play_capsule).
+
+You drive with the keyboard and mouse in the live stream; the AI can also observe the game state and act
+through the capsule's tools. To remove it, delete its stack:
+
+```bash
+aws cloudformation delete-stack --stack-name pairputer-capsule-agent-doom
+```
