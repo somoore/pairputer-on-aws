@@ -7,19 +7,37 @@ export XDG_RUNTIME_DIR=/run/user/1000
 mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 export HOME=/home/app
 APPDIR=/home/app/app
+# PulseAudio writes its cookie + runtime state under $HOME/.config/pulse; without a writable
+# $HOME/.config the daemon can exit at startup. Workbench session.sh mkdir's this before pulse;
+# doom's run_app never did — a real doom-vs-workbench gap. Best-effort (app-owned HOME).
+mkdir -p "$HOME/.config/pulse" "$HOME/.local/state" 2>/dev/null || true
 
 # PulseAudio null-sink, supervised. A one-shot `--start` that loses the boot
 # race (or a daemon that dies later) left the capsule silent for its whole
 # lifetime: parec got Connection refused and DOOM's SDL initialized with no
 # audio backend. Same failure shape as the input_ws Xvnc race — the fix is the
 # same: wait until it's really up, and keep a watchdog on it.
+PA_LOG=/tmp/pa_dbg.log
 pulse_up() {
-  pulseaudio --start --exit-idle-time=-1 --disallow-exit 2>&1 | sed 's/^/[pa] /' >&2 || LOG "pulseaudio --start rc=$?"
+  # Mirror workbench session.sh's PROVEN daemon start EXACTLY: `pulseaudio --daemonize=yes
+  # --exit-idle-time=-1 --log-target=stderr` with stderr to a FILE (2>>$PA_LOG), NOT a `| sed`
+  # pipe. The pipe was the bug: it detached the daemonized child's stderr so its own death reason
+  # never surfaced, and piping a double-forked daemon's stderr is fragile. --daemonize's parent
+  # exits 0 the instant it forks, so its rc is meaningless — we TRUST `pactl info`, not the exit
+  # code. /dbg reads $PA_LOG so a daemon that won't stay up finally NAMES why.
+  if ! pactl info >/dev/null 2>&1; then
+    echo "--- pulseaudio --daemonize $(date -u +%FT%TZ) ---" >>"$PA_LOG" 2>/dev/null || true
+    pulseaudio --daemonize=yes --exit-idle-time=-1 --log-target=stderr >>"$PA_LOG" 2>&1 || true
+  fi
   for _ in $(seq 1 15); do pactl info >/dev/null 2>&1 && break; sleep 1; done
-  pactl info >/dev/null 2>&1 || { LOG "pulse_up: daemon still unreachable"; return 1; }
-  pactl list short sinks 2>/dev/null | grep -q 'capsule' || \
-    pactl load-module module-null-sink sink_name=capsule rate=48000 channels=2 sink_properties=device.description=capsule 2>&1 | sed 's/^/[pa] null-sink: /' >&2 || LOG "null-sink FAILED"
-  pactl set-default-sink capsule 2>&1 | sed 's/^/[pa] /' >&2 || true
+  if ! pactl info >/dev/null 2>&1; then
+    LOG "pulse_up: daemon NOT listening after start (see /dbg pa log)"; tail -n 20 "$PA_LOG" 2>/dev/null | sed 's/^/[pa] /' >&2 || true
+    return 1
+  fi
+  if ! pactl list short sinks 2>/dev/null | grep -q 'capsule'; then
+    pactl load-module module-null-sink sink_name=capsule rate=48000 channels=2 sink_properties=device.description=capsule >/dev/null 2>&1 || LOG "null-sink load FAILED"
+  fi
+  pactl set-default-sink capsule >/dev/null 2>&1 || true
 }
 pulse_up || LOG "pulse_up failed at boot -- watchdog will keep retrying"
 ( while :; do

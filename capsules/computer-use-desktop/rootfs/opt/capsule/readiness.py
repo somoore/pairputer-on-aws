@@ -249,4 +249,9 @@ if __name__=="__main__":
  try:os.unlink(READY_FLAG)
  except FileNotFoundError:pass
  threading.Thread(target=monitor,name="readiness-monitor",daemon=True).start()
- ThreadingHTTPServer((os.environ.get("PAIRPUTER_READY_BIND","0.0.0.0"),9000),Handler).serve_forever()
+ # 127.0.0.1 ONLY: capsuled probes :9000 over the CH vsock (the ee968da forwarder does
+ # vsock:9000->127.0.0.1:9000), so :9000 + the /dbg logs must NOT be on the tap — a peer VM or the
+ # guest network could otherwise read another tenant's boot diagnostics (the cross-tenant boundary
+ # the vsock readiness design exists to close). Matches agent-doom hook.py. Default loopback; the
+ # env override stays for any host-direct debug use.
+ ThreadingHTTPServer((os.environ.get("PAIRPUTER_READY_BIND","127.0.0.1"),9000),Handler).serve_forever()

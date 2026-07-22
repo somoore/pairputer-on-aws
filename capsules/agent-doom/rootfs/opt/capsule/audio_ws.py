@@ -6,6 +6,7 @@ Frame 1 is OpusHead. Later frames are raw 20 ms Opus packets.
 import asyncio
 import os
 import subprocess
+import time
 import websockets
 
 DEVICE = "capsule.monitor"
@@ -29,22 +30,69 @@ async def _acquire_audio_slot(ws):
     return True
 
 
+def _dbg_log():
+    # /tmp, not /var/log: audio_ws runs as 'app' (uid 1000) and /var/log is
+    # 0755 root:root — a /var/log open() silently fell to DEVNULL, so /dbg/audio
+    # read EMPTY for the whole investigation. /tmp is app-writable (like
+    # /tmp/audiows.log). ready-gate.sh reads it as root over vsock :9000.
+    try:
+        return open("/tmp/audio_dbg.log", "ab", buffering=0)
+    except Exception:
+        return subprocess.DEVNULL
+
+
+def _wait_for_source(dbg, tries=15):
+    """Wait for the pulse capsule.monitor source before spawning parec.
+
+    The real audio bug: parec spawned once against an absent capsule.monitor
+    dies instantly, ffmpeg emits only OpusHead then EOFs (":6902 = 19-byte
+    header then closes"). run_app.sh's pulse watchdog can drop+recreate the
+    null-sink, so a connect can race it. Poll instead of spawning blind.
+    """
+    for _ in range(tries):
+        try:
+            out = subprocess.run(["pactl", "list", "short", "sources"],
+                                 capture_output=True, timeout=3).stdout
+            if b"capsule.monitor" in out:
+                return True
+        except Exception:
+            pass
+        _write(dbg, "waiting for capsule.monitor source...\n")
+        time.sleep(1)
+    _write(dbg, "capsule.monitor NEVER appeared -- null-sink dead/absent\n")
+    return False
+
+
+def _write(dbg, msg):
+    try:
+        dbg.write(msg.encode())
+    except Exception:
+        pass
+
+
 def _start_pipeline():
     """Start parec -> ffmpeg(libopus/ogg)."""
+    # DIAG: tee parec + ffmpeg stderr to /var/log/audio_dbg.log (read over vsock
+    # :9000/dbg/audio) so a silent capsule shows the cause — parec failing to open
+    # the pulse capsule.monitor source (dead sink / SDL-vs-pulse race) vs an ffmpeg
+    # opus error. ":6902 serves Opus" != audible; this names which side is broken.
+    _dbg = _dbg_log()
+    _write(_dbg, "--- pipeline start ---\n")
+    _wait_for_source(_dbg)
     parec = subprocess.Popen(
         ["parec", "--format=s16le", f"--rate={RATE}", f"--channels={CHANNELS}",
          "--latency-msec=30", "-d", DEVICE],
-        stdout=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=_dbg,
     )
     ffmpeg = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+        ["ffmpeg", "-hide_banner", "-loglevel", "warning",
          "-f", "s16le", "-ar", str(RATE), "-ac", str(CHANNELS), "-i", "pipe:0",
          "-c:a", "libopus", "-b:a", BITRATE, "-application", "audio",
          "-frame_duration", "20",
          # One Ogg page per packet keeps latency near one frame.
          "-page_duration", "20000", "-flush_packets", "1",
          "-f", "ogg", "pipe:1"],
-        stdin=parec.stdout, stdout=subprocess.PIPE,
+        stdin=parec.stdout, stdout=subprocess.PIPE, stderr=_dbg,
     )
     if parec.stdout:
         parec.stdout.close()
