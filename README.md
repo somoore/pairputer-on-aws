@@ -91,6 +91,7 @@ in dependency order. Nothing is left running, so the bill stops.
 ## Learn more
 
 - [`docs/architecture.md`](./docs/architecture.md): how the pieces fit (diagram)
+- [`docs/create-capsule.md`](./docs/create-capsule.md): build your own capsule (the cartridge model)
 - [`docs/1-click-advanced.md`](./docs/1-click-advanced.md): every 1-click launch parameter and what it does
 - [`docs/1-click-cost.md`](./docs/1-click-cost.md): every resource + IAM role + cost model
 - [`SECURITY.md`](./SECURITY.md): the end-to-end supply-chain and trust model
