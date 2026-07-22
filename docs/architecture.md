@@ -138,6 +138,79 @@ streaming chain), OSI-mapped with the encrypted-vs-cleartext boundaries and resi
 
 ---
 
+## How the widget renders in the chat
+
+The interactive panel you see in the chat is an **MCP-UI app**, not a normal iframe the model opens.
+The MCP server publishes the widget HTML as a single MCP resource, and the chat host renders it inline
+as an app component.
+
+- **The resource.** The server registers one resource, `ui://pairputer-platform/app.html`, with the
+  MIME type `text/html;profile=mcp-app`. Both strings are fixed; hosts cache the tool-to-resource
+  binding, so the widget ships new HTML by changing the server, not the URI.
+- **The binding.** The `play_capsule` tool carries the resource URI in its `_meta`, bound three ways so
+  every host finds it: `openai/outputTemplate` for Codex and ChatGPT (the OpenAI Apps SDK), and the
+  nested `ui.resourceUri` for Claude (the MCP Apps standard, SEP-1865). When the host runs the tool, it
+  renders the bound resource inline.
+- **Two bridge dialects.** Codex and ChatGPT expose a `window.openai` bridge; Claude has no
+  `window.openai` and uses the standard MCP Apps `ui/*` postMessage bridge instead. The widget
+  (`app.html`) detects which is present at runtime and speaks the right one.
+
+The widget owns the Freeze, Thaw, and Trash controls and refreshes its own tokens over MCP. It does not
+decode the video itself on most hosts; it **embeds the relay's `/player` iframe**, which runs the
+WebCodecs decode and batches input. The exception is Claude: its sandbox allows the relay origin in
+`connect-src` but blocks `frame-src`, so the widget runs the same decode-and-input engine directly in
+its own DOM instead of embedding the player. If the player iframe fails to boot within six seconds on
+any host, the widget falls back to this direct mode automatically.
+
+---
+
+## Tools the MCP server and capsule expose
+
+There are two tiers of tools. The **MCP server** exposes a small, fixed set of platform tools that
+every capsule shares. Each **capsule** additionally declares its own typed tools, which the server
+registers at runtime from the capsule's manifest, so the AI can act inside that specific capsule.
+
+### Platform tools (the MCP server)
+
+These are the same for any capsule:
+
+- **Lifecycle:** `play_capsule` (open a capsule: render the widget and launch or resume its MicroVM),
+  `freeze`, `thaw`, `trash_microvm`, and `capsule_state` (report RUNNING / SUSPENDED / STOPPED).
+- **Session:** `pairputer_session` mints a fresh relay token for an already-open widget, which is how a
+  session outlives the 15-minute token TTL without a re-login.
+- **Discovery and identity:** `list_capsules` (the picker; discovers pairputer-tagged images at
+  runtime), `capsule_metadata` (a capsule's metadata, including its full declared tool list), and
+  `whoami` (the authenticated Cognito principal).
+- **Storage and settings:** `persistent_storage` (durable `workspace/persistent/` storage, reachable
+  without a running VM; the preferred way to move a file up to 8 MB into the capsule), `network_airgap`
+  (toggle the capsule's internet air-gap live; capsules ship air-gapped), and `session_settings`
+  (running time, estimated cost, and the idle-before-suspend window).
+
+### Capsule tools (the Pairputer Workbench)
+
+An agent-interactive capsule ships its tools over an **agent bridge** inside the VM (`:6905`,
+HTTP/JSON). The server reads the capsule's manifest and registers those tools, so the AI drives the
+live desktop through typed, verifiable calls rather than raw keystrokes. The Workbench declares tools in
+these groups (see `capsule_metadata` for the authoritative, complete list):
+
+- **Observe:** `observe` (a fused desktop, control, and task snapshot) and `screenshot`.
+- **Computer use:** `computer_action` (the standard click, type, scroll, drag, and key vocabulary) and
+  a consent-gated `physical_input` fallback.
+- **Verified task execution:** `drive_task`, `continue_task`, `task_status`, and `cancel_task`, a
+  heavyweight engine that runs a typed plan and proves each step against success predicates.
+- **Confined workspace:** `workspace_read`, `workspace_write`, `workspace_upload`, `workspace_patch`,
+  and related tools that operate only inside `/home/app/workspace` with SHA-256 evidence.
+- **Commands:** `run_command` (in the visible terminal), `job_status`, and `cancel_job`.
+- **Apps, windows, and accessibility:** `open_app`, `list_windows`, `focus_window`, `ui_tree`,
+  `ground_target` (map a natural-language intent to on-screen elements), and `ui_action`.
+- **Browser:** `browser_open`, `browser_observe`, `browser_query`, and `browser_action`.
+
+Consequential actions that reach outside the VM (running a command, submitting a browser form) require
+an explicit, single-use approval token. In-VM effects run freely, because the VM is disposable. A
+stream-only capsule declares no tools, and the panel is then a live desktop with no AI actuation.
+
+---
+
 ## Auth and token flow
 
 Two independent grants: a long-lived, revocable **identity** (Cognito) gates the control plane; a
