@@ -1,0 +1,20 @@
+# Code owners are automatically requested for review and — via the protect-main ruleset —
+# their approval is REQUIRED before a PR touching these paths can merge. Anyone may open a PR;
+# only an owner can approve changes to the supply chain, deploy surface, and CI itself.
+
+# Default owner for everything (sole maintainer).
+*                                   @somoore
+
+# Supply chain + CI: workflows mint OIDC AWS creds and publish signed images/templates.
+# A PR editing these must never merge without an owner's explicit approval.
+/.github/                           @somoore
+/ci/                                @somoore
+
+# Deploy surface: CloudFormation, deploy scripts, the MCP server, the relay.
+/substrate/                         @somoore
+/capsules/nested/                   @somoore
+/scripts/                           @somoore
+
+# Security policy + this file itself.
+/SECURITY.md                        @somoore
+/.github/CODEOWNERS                 @somoore
