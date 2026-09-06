@@ -126,7 +126,9 @@ regression checklist. You do not need any of it to connect ChatGPT.
 **Status:** web and desktop verified end-to-end (2026-07-08/09) - OAuth, tools, 30 FPS video,
 input, audio, freeze/thaw, and PiP pop-out (web floating, desktop docked). Distribution target is
 private **Developer Mode connectors**; an app-store submission (dedicated widget domain, OpenAI
-review) is a documented follow-up. Outstanding: CSP-ON retest.
+review) is a documented follow-up. Outstanding: CSP-ON retest. The July observations below are
+historical; the current acceptance criteria and code-level evidence are in
+[`chatgpt-csp-retest.md`](./chatgpt-csp-retest.md).
 
 ## Walls we hit (so you don't)
 
@@ -171,9 +173,12 @@ chat host's connector still pins the OLD registration, and the failure modes are
 - **Direct outbound networking from the widget** to `openai/widgetCSP.connect_domains` origins is
   documented (fetch/SSE/WebSocket) - unverified by us; we kept the relay player iframe (works through
   `frameDomains`, zero player duplication). Direct-connect is a possible later simplification
-  (needs CORS on the relay).
-- **Display modes:** inline / fullscreen / **PiP** using `window.openai.requestDisplayMode({mode})` - negotiated, user-gesture-only, PiP → fullscreen on mobile; transitions may REMOUNT the widget
-  (verify with PROBE-8). Phase 4 wires the Pop-out UX.
+  (the shared relay already supplies CORS for the Claude direct player).
+- **Display modes:** the current widget offers **Fullscreen / Inline** using
+  `window.openai.requestDisplayMode({mode})`, with native element-fullscreen fallback if the host
+  declines. Requests originate from button clicks; boot only reads the current mode. The PiP button
+  was removed on 2026-07-12. Historical PiP observations below do not describe a current widget
+  control. PROBE-8 must test actual remounts and the current fullscreen flow.
 - **~60 s tool budget** (vs Codex ~25 s).
 
 ## Auth architecture (why there's no proxy)
@@ -191,19 +196,23 @@ DCR, no CIMD, no client secret.
 1. OAuth round-trip completes; tools listed after Refresh. ✅ 2026-07-08
 2. `play_capsule` → widget renders → video streams → keyboard/mouse reach the capsule → audio
    plays. ✅ all human-confirmed 2026-07-08
-3. Freeze → leave/reopen thread (frozen overlay, VM not woken) → Thaw → play resumes. ✅ (freeze +
-   thaw verified; leave/reopen-while-frozen still to run)
-4. **Pop out (PiP)** → game floats while chat scrolls beneath → return inline; stream survives
-   both transitions. ✅ 2026-07-08 (fullscreen toggle shipped; PiP button is host-gated - Codex
-   never sees it)
+3. Freeze → leave/reopen thread (frozen overlay, VM not woken) → Thaw → play resumes.
+   Freeze/thaw was verified in July; leave/reopen-while-frozen remains pending live.
+4. **Fullscreen → Inline**, including any host remount: same session, accurate mode label, mute
+   preference preserved, video/input/audio recover. Pending current PROBE-8 retest. The removed
+   PiP control was verified on 2026-07-08; it is historical evidence only.
 5. >15-min session: widget-initiated `pairputer_session` refresh keeps the stream alive.
-6. Repeat 2-5 on ChatGPT **desktop**. ✅ 2026-07-09 human-confirmed (gameplay, sound,
-   keyboard/video/mouse, pop-out - docked panel, stall watchdog recovers the stream)
-7. Repeat with **Enforce CSP in developer mode ON**.
-8. Codex regression: Codex rides this same ChatGPT connector, so steps 1-7 cover it. ✅ 2026-07-08
+6. Repeat 2-5 on ChatGPT **desktop**. Historical 2026-07-09 human confirmation covers gameplay,
+   sound, keyboard/video/mouse and the former docked pop-out. Current CSP-ON/remount retest is pending.
+7. Repeat with **Enforce CSP in developer mode ON**, using the evidence requirements in
+   [`chatgpt-csp-retest.md`](./chatgpt-csp-retest.md).
+8. Run a **separate Codex regression**. Sharing a connector/resource does not prove identical host
+   behavior. Preserve the resource URI/MIME binding and record which display modes this client grants.
 
 ## Probe results
 
 PROBE-1 ✅ (renders `text/html;profile=mcp-app` unchanged), PROBE-7 ✅ (widget callTool works),
 PROBE-4/6 ✅ (auth discovery, see [`architecture.md`](./architecture.md)). Pending: PROBE-3
-(audio/autoplay with CSP ON), PROBE-8 (display-mode remount).
+(audio/autoplay with CSP ON), PROBE-8 (display-mode remount). Executable local regressions and the
+remaining live checks are tracked in [`chatgpt-csp-retest.md`](./chatgpt-csp-retest.md); local test
+passes do not close either live probe.

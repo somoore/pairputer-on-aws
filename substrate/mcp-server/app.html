@@ -318,10 +318,10 @@ const host = (() => {
       try {
         if (window.openai && typeof window.openai.requestDisplayMode === 'function') {
           const r = await window.openai.requestDisplayMode({ mode });
-          return (r && r.mode) || mode;
+          return (r && r.mode) || window.openai.displayMode || 'inline';
         }
         const r = await call('ui/request-display-mode', { mode });
-        return (r && r.mode) || mode;
+        return (r && r.mode) || 'inline';
       } catch { return 'inline'; }
     },
     getDisplayMode: () => (window.openai && window.openai.displayMode) || 'inline',
@@ -407,11 +407,18 @@ let starting = false;
 // Persisted so a widget remount (host turn / display-mode change) can't silently re-launch a VM the
 // user froze or trashed. EVERY auto-recovery path (stall watchdog, self-heal, needtoken, boot,
 // pollers) checks canAutoWake(); only explicit user Freeze/Thaw/Trash/Launch gestures change intent.
+const intentByImage = new Map();  // fallback when sandbox storage is unavailable
 function setIntent(next) {   // 'running' | 'frozen' | 'stopped'
+  intentByImage.set(imageId, next);
   try { localStorage.setItem(storageKey('intent'), next); } catch {}
+  persistState();
 }
 function getIntent() {
-  try { return localStorage.getItem(storageKey('intent')) || ''; } catch { return ''; }
+  try {
+    const stored = localStorage.getItem(storageKey('intent'));
+    if (stored) return stored;  // another card's newer Freeze/Thaw takes precedence
+  } catch {}
+  return intentByImage.get(imageId) || '';
 }
 // True only when the user intends the VM running — gates automatic waking/streaming recovery.
 function canAutoWake() { return getIntent() === 'running' && !frozen && !stopped; }
@@ -423,6 +430,7 @@ let directPlayer = null;   // in-widget player for hosts that block nested ifram
 let useDirectPlayer = false;  // set from the host profile's streamMode
 let rpcSeq = 0;
 let openNonce = '';
+let lastConsumedOpenNonce = '';
 // Empty until a session payload names the capsule — the SERVER resolves "" to the sole/default
 // registered capsule. Never hardcode a capsule id here (a widget that boots without a play payload,
 // e.g. ChatGPT rendering from a state read, would poison every explicit call with the wrong id).
@@ -1040,10 +1048,15 @@ function makeDirectPlayer() {
   const startAudio = () => {
     if (aes || !('AudioDecoder' in window)) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    const playbackContext = audioCtx;
     audioGain = audioCtx.createGain(); audioGain.gain.value = localMuted ? 0 : 1; audioGain.connect(audioCtx.destination);
     let nextTime = 0, configured = false, ats = 0;
     adec = new AudioDecoder({
-      output: ad => { const ch = ad.numberOfChannels, n = ad.numberOfFrames, sr = ad.sampleRate;
+      output: ad => {
+        // Autoplay can suspend the context indefinitely. Drop live audio rather than queueing a
+        // backlog against its stopped clock; also discard callbacks from a replaced stream.
+        if (audioCtx !== playbackContext || playbackContext.state !== 'running') { ad.close(); nextTime = 0; return; }
+        const ch = ad.numberOfChannels, n = ad.numberOfFrames, sr = ad.sampleRate;
         const buf = audioCtx.createBuffer(ch, n, sr);
         for (let c = 0; c < ch; c++) { const tt = new Float32Array(n); ad.copyTo(tt, { planeIndex: c, format: 'f32-planar' }); buf.copyToChannel(tt, c); } ad.close();
         nextTime = Math.max(audioCtx.currentTime, nextTime); if (nextTime - audioCtx.currentTime > 0.2) nextTime = audioCtx.currentTime;
@@ -1151,9 +1164,12 @@ function onHostContext(hc) {
   applyHostLayout();
 }
 function persistState() {
-  host.setWidgetState({ imageId, openNonce, mode: displayMode, ts: Date.now() });
+  // UI state only: never persist relay tokens, signed URLs, or edge credentials in host state.
+  host.setWidgetState({ imageId, openNonce, lastOpenNonce: lastConsumedOpenNonce,
+    intent: getIntent(), muted, mode: displayMode, ts: Date.now() });
 }
 async function setMode(mode) {
+  persistState();  // the host may remount before requestDisplayMode resolves
   const granted = await host.requestDisplayMode(mode);  // may differ (mobile/host coercion) or be inline
   displayMode = granted;
   updateModeButton();
@@ -1161,9 +1177,7 @@ async function setMode(mode) {
   persistState();
   return granted;
 }
-// Mode buttons are HOST-GATED: rendered only for modes the host profile declares (payload
-// displayModes). Codex declares none → no dead PiP/Fullscreen buttons; ChatGPT declares both.
-// Labels always render from the GRANTED mode, so a coerced request stays truthful.
+// Fullscreen is always offered, with a native fallback. Labels reflect the granted/observed mode.
 function updateModeButton() {
   const full = $('full');
   if (full) {
@@ -1928,8 +1942,7 @@ $('thaw').onclick = async () => {
 };
 
 $('trash').onclick = showTrashMenu;
-// Mode toggles (host-gated visibility via updateModeButton; requests only from these click
-// handlers — the user-gesture rule). Toggling out always requests inline.
+// Mode requests originate from these click handlers. Toggling out requests inline.
 $('full').onclick = async () => {
   // Toggle OFF first if we're already expanded.
   if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch {} updateModeButton(); return; }
@@ -1958,6 +1971,7 @@ updateModeButton();
 applyHostLayout();
 $('mute').onclick = () => {
   muted = !muted;
+  persistState();
   renderUI();
   if (playerActive()) sendPlayerCmd('setMuted', { muted });
 };
@@ -2004,26 +2018,34 @@ $('mute').onclick = () => {
   // is enough for refreshSession/thaw to target the RIGHT capsule. With MULTIPLE capsules deployed an
   // empty imageId makes those tools error ("multiple capsules — pass image_id explicitly"), so recover
   // it whenever it's still empty — not only when sc is absent. Never a mode request here (no gesture).
-  if (!imageId || !sc) {
-    const ws = host.getWidgetState();
-    if (ws && ws.imageId) { imageId = imageId || String(ws.imageId); openNonce = ws.openNonce ? String(ws.openNonce) : openNonce; }
+  const ws = host.getWidgetState();
+  imageId = String(sc && sc.imageId || imageId || ws && ws.imageId || '');
+  const sameCard = ws && String(ws.imageId || '') === imageId;
+  if (sameCard) {
+    openNonce = ws.openNonce ? String(ws.openNonce) : openNonce;
+    lastConsumedOpenNonce = String(ws.lastOpenNonce || ws.openNonce || '');
+    if (['running', 'frozen', 'stopped'].includes(ws.intent)) intentByImage.set(imageId, ws.intent);
+    if (typeof ws.muted === 'boolean') muted = ws.muted;
   }
   applySession(sc);
   let bootSession = sc || null;
   let persisted = false;
-  let lastOpenNonce = '';
+  let lastOpenNonce = lastConsumedOpenNonce;
   try {
     persisted = localStorage.getItem(storageKey('frozen')) === '1';
-    lastOpenNonce = localStorage.getItem(storageKey('open_nonce')) || '';
+    lastOpenNonce = localStorage.getItem(storageKey('open_nonce')) || lastOpenNonce;
   } catch {}
+  lastConsumedOpenNonce = lastOpenNonce;
   const nonce = (bootSession && bootSession.openNonce) || openNonce || '';
   // A NEW nonce is an explicit play_capsule invocation and therefore overrides an older
   // stopped/frozen latch. A host remount replays the SAME nonce, so it is not explicit and the
   // persisted lifecycle intent still vetoes any wake. This is the critical distinction between a
   // real open and a remount of an old card.
   const bootIntent = getIntent();
+  persisted = persisted || bootIntent === 'frozen';
   const explicitOpen = isFreshExplicitOpen(bootSession, lastOpenNonce);
   if (explicitOpen) {
+    lastConsumedOpenNonce = String(nonce);
     try {
       localStorage.setItem(storageKey('open_nonce'), nonce);
       localStorage.removeItem(storageKey('frozen'));
