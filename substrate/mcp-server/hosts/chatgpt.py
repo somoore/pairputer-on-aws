@@ -3,12 +3,10 @@
 ChatGPT renders MCP Apps widgets via the OpenAI Apps SDK (window.openai bridge, same dialect as
 Codex) but with a materially friendlier sandbox: direct fetch/SSE/WebSocket to widgetCSP
 connect_domains, cross-origin iframes via frameDomains, inline/fullscreen/PiP display modes, ~60s
-tool budget. See docs/hosts/chatgpt.md for the connector setup + probe results.
+tool budget. See docs/chatgpt.md and docs/chatgpt-csp-retest.md for setup and probe status.
 
-resource_uri/mime: until PROBE-1 (does ChatGPT render text/html;profile=mcp-app?) says otherwise,
-ChatGPT uses the same resource as Codex — one widget, one binding. If PROBE-1 fails, point this at
-ui://pairputer-platform/app-std.html (registered with plain text/html) and flip the tool meta per the
-plan's PROBE-2 outcome.
+PROBE-1 verified text/html;profile=mcp-app on 2026-07-08. Keep the shared resource URI/MIME stable;
+existing connector installs cache that binding. CSP-ON and current remount validation remain open.
 """
 from . import HostProfile
 

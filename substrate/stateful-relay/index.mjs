@@ -1522,9 +1522,13 @@ let audioCtx=null,audioGain=null,muted=false;
 function startAudio(){
   if(window._a||!('AudioDecoder'in window))return;
   audioCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
+  const playbackContext=audioCtx;
   audioGain=audioCtx.createGain();audioGain.gain.value=muted?0:1;audioGain.connect(audioCtx.destination);
   let nextTime=0,configured=false,ats=0;
-  const dec=new AudioDecoder({output:ad=>{const ch=ad.numberOfChannels,n=ad.numberOfFrames,sr=ad.sampleRate;
+  const dec=new AudioDecoder({output:ad=>{
+    // A suspended clock must not accumulate live audio; old decoder callbacks must not use a new stream.
+    if(audioCtx!==playbackContext||playbackContext.state!=='running'){ad.close();nextTime=0;return;}
+    const ch=ad.numberOfChannels,n=ad.numberOfFrames,sr=ad.sampleRate;
     const buf=audioCtx.createBuffer(ch,n,sr);for(let c=0;c<ch;c++){const tt=new Float32Array(n);ad.copyTo(tt,{planeIndex:c,format:'f32-planar'});buf.copyToChannel(tt,c);}ad.close();
     nextTime=Math.max(audioCtx.currentTime,nextTime);if(nextTime-audioCtx.currentTime>0.2)nextTime=audioCtx.currentTime;
     const sx=audioCtx.createBufferSource();sx.buffer=buf;sx.connect(audioGain);sx.start(nextTime);nextTime+=buf.duration;},
