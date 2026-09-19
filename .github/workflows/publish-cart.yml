@@ -11,6 +11,8 @@ on:
       confirm:
         description: 'Type "publish" to confirm building + signing the public cart image'
         required: true
+  push:
+    branches: [publish-cart]    # the branch that carries this file publishes on push, deliberately
 
 permissions:
   id-token: write               # lets the runner mint the GitHub OIDC token (AWS auth + cosign)
@@ -25,7 +27,7 @@ env:
 
 jobs:
   publish:
-    if: ${{ inputs.confirm == 'publish' }}
+    if: ${{ github.event_name == 'push' || inputs.confirm == 'publish' }}
     runs-on: ubuntu-24.04-arm   # native arm64: the guest is an Apple-silicon microVM, no QEMU
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
