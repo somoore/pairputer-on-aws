@@ -1,0 +1,83 @@
+name: publish-cart
+
+# Builds the agent-doom capsule as an OCI image for the local pairputer (`pair up doom`), pushes it
+# to ECR Public and signs it keylessly, the same way publish-images.yml signs the platform images.
+# The local pairputer pins the digest this run prints (carts/doom.pin) and verifies the signature
+# against this workflow's identity before the guest ever boots.
+
+on:
+  workflow_dispatch:            # manual, deliberate publish (not on every push)
+    inputs:
+      confirm:
+        description: 'Type "publish" to confirm building + signing the public cart image'
+        required: true
+
+permissions:
+  id-token: write               # lets the runner mint the GitHub OIDC token (AWS auth + cosign)
+  contents: read
+
+env:
+  AWS_REGION: us-east-1         # ECR Public is us-east-1 only
+  ROLE_ARN: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+  ECR_ALIAS: ${{ vars.ECR_PUBLIC_ALIAS }}
+  CART: cart-doom
+  CONTEXT: capsules/agent-doom
+
+jobs:
+  publish:
+    if: ${{ inputs.confirm == 'publish' }}
+    runs-on: ubuntu-24.04-arm   # native arm64: the guest is an Apple-silicon microVM, no QEMU
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Configure AWS via OIDC (no stored keys)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR Public
+        run: aws ecr-public get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Create the repository if it is new
+        run: aws ecr-public describe-repositories --region "$AWS_REGION" --repository-names "$CART" >/dev/null 2>&1 || aws ecr-public create-repository --region "$AWS_REGION" --repository-name "$CART" >/dev/null
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Build + push ARM64 (single-manifest, no index)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/Dockerfile
+          platforms: linux/arm64
+          push: true
+          provenance: false          # clean v2 manifest, not an OCI index; the digest is the image
+          sbom: false
+          tags: public.ecr.aws/${{ env.ECR_ALIAS }}/${{ env.CART }}:latest
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v3.1.1
+
+      - name: Cosign keyless SIGN the digest
+        env:
+          IMG: public.ecr.aws/${{ env.ECR_ALIAS }}/${{ env.CART }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMG"
+
+      - name: Cosign keyless SLSA build-provenance ATTEST the digest
+        env:
+          IMG: public.ecr.aws/${{ env.ECR_ALIAS }}/${{ env.CART }}@${{ steps.build.outputs.digest }}
+        run: |
+          cat > /tmp/prov.json <<EOT
+          {"buildType":"https://github.com/${{ github.repository }}/actions",
+           "builder":{"id":"https://github.com/${{ github.workflow_ref }}"},
+           "invocation":{"configSource":{"uri":"git+https://github.com/${{ github.repository }}@${{ github.ref }}",
+             "digest":{"sha1":"${{ github.sha }}"}}}}
+          EOT
+          cosign attest --yes --type slsaprovenance --predicate /tmp/prov.json "$IMG"
+
+      - name: Emit the signed digest (pin it in the local pairputer's carts/doom.pin)
+        run: |
+          echo "::notice title=${{ env.CART }}::public.ecr.aws/${{ env.ECR_ALIAS }}/${{ env.CART }}@${{ steps.build.outputs.digest }}"
+          echo "SIGNED DIGEST -> public.ecr.aws/${{ env.ECR_ALIAS }}/${{ env.CART }}@${{ steps.build.outputs.digest }}"
