@@ -1,6 +1,6 @@
-# Digest-pinned (supply chain): node:20-bookworm-slim arm64.
-# To bump: docker buildx imagetools inspect node:20-bookworm-slim (arm64 digest).
-FROM node:20-bookworm-slim@sha256:10fc5f5f33cba34a4befa58fcf95f724e67707fab7c32fb8cd3fcf90ebcc20df
+# Digest-pinned (supply chain): node:24-bookworm-slim (24.22.1, Oct-2026 security release).
+# To bump: docker buildx imagetools inspect node:24-bookworm-slim.
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 
 WORKDIR /app
 ENV NODE_ENV=production
