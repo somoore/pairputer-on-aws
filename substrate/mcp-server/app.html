@@ -2005,6 +2005,20 @@ $('mute').onclick = () => {
       applyHostLayout();
     }
   }).catch(() => {});
+  // Restore the host snapshot BEFORE waiting for tool data. Fullscreen and Mute are already live
+  // during the wait, and both persist state; writing defaults over the snapshot right before a
+  // display-mode request (which may remount us) would lose the capsule, nonce and lifecycle intent
+  // when localStorage is unavailable. Reconciled against the tool data's imageId after the wait.
+  const ws = host.getWidgetState();
+  const restoreSnapshot = () => {
+    openNonce = ws.openNonce ? String(ws.openNonce) : openNonce;
+    lastConsumedOpenNonce = String(ws.lastOpenNonce || ws.openNonce || '');
+    if (['running', 'frozen', 'stopped'].includes(ws.intent)) intentByImage.set(imageId, ws.intent);
+    if (typeof ws.muted === 'boolean') muted = ws.muted;
+  };
+  const snapshotImage = String(ws && ws.imageId || '');
+  const restoredEarly = !!snapshotImage && !imageId;
+  if (restoredEarly) { imageId = snapshotImage; restoreSnapshot(); }
   // On the standard bridge the tool-result arrives as a ui/* NOTIFICATION shortly after the
   // handshake — poll a bit longer for it. openai hosts already have toolOutput synchronously.
   let sc = readToolData();
@@ -2018,14 +2032,12 @@ $('mute').onclick = () => {
   // is enough for refreshSession/thaw to target the RIGHT capsule. With MULTIPLE capsules deployed an
   // empty imageId makes those tools error ("multiple capsules — pass image_id explicitly"), so recover
   // it whenever it's still empty — not only when sc is absent. Never a mode request here (no gesture).
-  const ws = host.getWidgetState();
-  imageId = String(sc && sc.imageId || imageId || ws && ws.imageId || '');
-  const sameCard = ws && String(ws.imageId || '') === imageId;
-  if (sameCard) {
-    openNonce = ws.openNonce ? String(ws.openNonce) : openNonce;
-    lastConsumedOpenNonce = String(ws.lastOpenNonce || ws.openNonce || '');
-    if (['running', 'frozen', 'stopped'].includes(ws.intent)) intentByImage.set(imageId, ws.intent);
-    if (typeof ws.muted === 'boolean') muted = ws.muted;
+  imageId = String(sc && sc.imageId || imageId || snapshotImage);
+  const sameCard = !!ws && snapshotImage === imageId;
+  if (sameCard && !restoredEarly) restoreSnapshot();
+  if (!sameCard && restoredEarly) {
+    // The tool data names a different capsule: the early restore belonged to another card.
+    openNonce = ''; lastConsumedOpenNonce = ''; muted = false;
   }
   applySession(sc);
   let bootSession = sc || null;

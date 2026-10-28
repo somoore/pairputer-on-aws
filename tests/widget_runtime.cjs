@@ -97,7 +97,7 @@ function environment({ storage = new Map(), blockedStorage = false, snapshot = n
   };
   sandbox.window = sandbox;
   context = vm.createContext(sandbox);
-  return { context, commands, tools, contexts, decoders, streams, sdk, storage, elements,
+  return { context, commands, tools, contexts, decoders, streams, sdk, storage, elements, timers,
     run: code => vm.runInContext(code, context),
     async boot() { this.run(script(app)); await tick(); },
   };
@@ -170,6 +170,38 @@ test('newer shared storage intent wins over a stale widget snapshot', async () =
   await e.boot();
   assert.ok(!e.commands.some(c => c.cmd === 'start'));
   assert.match(e.elements.get('state').textContent, /SUSPENDED/);
+});
+
+test('Fullscreen clicked while a state-only remount awaits tool data keeps the host snapshot', async () => {
+  const snapshot = { imageId: session.imageId, openNonce: session.openNonce,
+    lastOpenNonce: session.openNonce, intent: 'frozen', muted: true };
+  const first = environment({ blockedStorage: true, toolOutput: null, snapshot });
+  await first.boot();  // parked in the tool-data poll: no session payload yet
+  await first.elements.get('full').onclick();
+  const saved = first.sdk.widgetState;
+  for (const key of ['imageId', 'openNonce', 'lastOpenNonce', 'intent', 'muted']) {
+    assert.equal(saved[key], snapshot[key], `${key} must survive the pre-restore state write`);
+  }
+  assert.equal(saved.mode, 'fullscreen');
+  // The host remounts on the mode change and replays the original tool output.
+  const second = environment({ blockedStorage: true, snapshot: saved });
+  await second.boot();
+  assert.ok(!second.commands.some(c => ['start', 'thaw'].includes(c.cmd)));
+  assert.ok(second.tools.every(t => !t.args.ensure_running));
+  assert.match(second.elements.get('state').textContent, /SUSPENDED/);
+});
+
+test('an early snapshot restore is discarded when the tool data names another capsule', async () => {
+  const e = environment({ toolOutput: null, snapshot: {
+    imageId: 'different-capsule', intent: 'frozen', muted: true, openNonce: session.openNonce,
+    lastOpenNonce: session.openNonce,
+  } });
+  await e.boot();
+  e.sdk.toolOutput = session;
+  for (const [id, t] of [...e.timers]) { e.timers.delete(id); t.fn(); }
+  await tick();
+  assert.ok(e.commands.some(c => c.cmd === 'start'));
+  assert.equal(e.elements.get('mute').textContent, '🔊 Sound');
 });
 
 test('granted fullscreen renders correctly and boot never requests a mode', async () => {
