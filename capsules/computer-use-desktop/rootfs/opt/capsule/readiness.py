@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 READY_FLAG="/run/capsule.ready"
 BRIDGE_KEY_FILE=os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY_FILE","/run/pairputer/bridge-ingress.key")
+VIEWER_KEY_FILE=os.environ.get("PAIRPUTER_VIEWER_KEY_FILE","/run/pairputer/viewer-input.key")
 MAX_HOOK_BODY=20*1024
 MAX_DEBUG_LOG_CHUNK=256*1024
 DEBUG_LOGS={
@@ -44,24 +45,39 @@ def bridge_capability_ready():
           stat.st_mode&0o777==0o640 and bool(CAPABILITY_RE.fullmatch(value)))
  except Exception:return False
 
-def install_bridge_capability(value):
- if not isinstance(value,str) or not CAPABILITY_RE.fullmatch(value):
-  raise ValueError("invalid bridge capability")
- directory=os.path.dirname(BRIDGE_KEY_FILE)
- os.makedirs(directory,mode=0o755,exist_ok=True)
- fd,temporary=tempfile.mkstemp(prefix=".bridge-ingress-",dir=directory)
+def viewer_capability_ready():
  try:
-  os.fchmod(fd,0o640);os.fchown(fd,0,grp.getgrnam("agent").gr_gid)
+  stat=os.stat(VIEWER_KEY_FILE,follow_symlinks=False)
+  with open(VIEWER_KEY_FILE,encoding="ascii") as handle:value=handle.read(257).strip()
+  return (stat.st_uid==0 and stat.st_gid==grp.getgrnam("pairputer-input").gr_gid and
+          stat.st_mode&0o777==0o640 and bool(CAPABILITY_RE.fullmatch(value)))
+ except Exception:return False
+
+def _install_key(path,value,group,prefix):
+ directory=os.path.dirname(path)
+ os.makedirs(directory,mode=0o755,exist_ok=True)
+ fd,temporary=tempfile.mkstemp(prefix=prefix,dir=directory)
+ try:
+  os.fchmod(fd,0o640);os.fchown(fd,0,grp.getgrnam(group).gr_gid)
   handle=os.fdopen(fd,"w",encoding="ascii",closefd=True);fd=-1
   with handle:
    handle.write(value+"\n");handle.flush();os.fsync(handle.fileno())
-  os.replace(temporary,BRIDGE_KEY_FILE)
-  os.chmod(BRIDGE_KEY_FILE,0o640,follow_symlinks=False)
-  os.chown(BRIDGE_KEY_FILE,0,grp.getgrnam("agent").gr_gid,follow_symlinks=False)
+  os.replace(temporary,path)
+  os.chmod(path,0o640,follow_symlinks=False)
+  os.chown(path,0,grp.getgrnam(group).gr_gid,follow_symlinks=False)
  finally:
   if fd>=0:os.close(fd)
   try:os.unlink(temporary)
   except FileNotFoundError:pass
+
+def install_bridge_capability(value):
+ if not isinstance(value,str) or not CAPABILITY_RE.fullmatch(value):
+  raise ValueError("invalid bridge capability")
+ # The bridge key (agent group) authenticates the MCP->guest bridge; the viewer key
+ # (pairputer-input group, readable by input_ws' inputd user) authenticates the relay's human
+ # input channel. Both carry the SAME per-MicroVM capability from the Run hook.
+ _install_key(BRIDGE_KEY_FILE,value,"agent",".bridge-ingress-")
+ _install_key(VIEWER_KEY_FILE,value,"pairputer-input",".viewer-input-")
 
 def accept_run_hook(raw):
  global RUN_HOOK_ACCEPTED
@@ -172,6 +188,7 @@ def checks():
   "atspi":atspi(),"video":port(6903),"audio":port(6902),"input":port(6904),"bridge":port(6905),
   "coplay":port(6906),"egress_proxy":egress_proxy(),"grpc":grpc_ready(),
   "bridge_capability":bridge_capability_ready(),
+  "viewer_capability":viewer_capability_ready(),
   "terminal_tmux":command(["runuser","-u","terminal","--","tmux","-f","/dev/null","has-session","-t","workbench"]),
   "workspace":workspace(),"journal":journal(),"rendered_frame":rendered(),
   "ffmpeg_capture":ffmpeg_capture(),
@@ -239,8 +256,8 @@ class Handler(BaseHTTPRequestHandler):
     self._send_json(503,{"ok":False,"error":"run_hook_rejected"})
    return
   if path in {"/resume","/aws/lambda-microvms/runtime/v1/resume"}:
-   self._send_json(200 if bridge_capability_ready() else 503,
-                   {"ok":bridge_capability_ready()})
+   ok=bridge_capability_ready() and viewer_capability_ready()
+   self._send_json(200 if ok else 503,{"ok":ok})
    return
   self.do_GET()
  def log_message(self,*args):pass

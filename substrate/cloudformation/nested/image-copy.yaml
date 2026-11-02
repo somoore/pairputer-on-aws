@@ -48,6 +48,9 @@ Resources:
       RepositoryName: !Sub "${RepoNamePrefix}-private/mcp"
       ImageTagMutability: IMMUTABLE
       EmptyOnDelete: true
+      # Scan copies of the public images on push; they land in the deployer's account.
+      ImageScanningConfiguration:
+        ScanOnPush: true
 
   RelayPrivateRepo:
     Type: AWS::ECR::Repository
@@ -56,6 +59,8 @@ Resources:
       RepositoryName: !Sub "${RepoNamePrefix}-private/relay"
       ImageTagMutability: IMMUTABLE
       EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
 
   CopierRole:
     Type: AWS::IAM::Role
@@ -123,10 +128,29 @@ Resources:
           phases:
             install:
               commands:
-                - set -euo pipefail
-                - echo "installing crane + cosign (arm64)"
-                - curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_arm64.tar.gz | tar -xz -C /usr/local/bin crane
-                - curl -sSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-arm64 && chmod +x /usr/local/bin/cosign
+                # crane + cosign are the verification gate and the ECR writer for this job, so both are
+                # pinned to an explicit release and checked against a committed SHA-256 BEFORE they are
+                # installed/executed. A compromised release asset or redirect now fails the build closed.
+                # Bump the version + digest together (and keep cosign aligned with publish-images.yml).
+                - |
+                  set -euo pipefail
+                  CRANE_VERSION="0.22.1"
+                  CRANE_SHA256="898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110"
+                  COSIGN_VERSION="3.1.1"
+                  COSIGN_SHA256="2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11"
+                  echo "installing crane ${CRANE_VERSION} + cosign ${COSIGN_VERSION} (arm64)"
+                  tmp="$(mktemp -d)"
+                  trap 'rm -rf "$tmp"' EXIT
+                  curl -fsSL -o "$tmp/crane.tar.gz" \
+                    "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz"
+                  echo "${CRANE_SHA256}  $tmp/crane.tar.gz" | sha256sum -c -
+                  tar -xzf "$tmp/crane.tar.gz" -C "$tmp" crane
+                  install -m 0755 "$tmp/crane" /usr/local/bin/crane
+                  curl -fsSL -o "$tmp/cosign" \
+                    "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-arm64"
+                  echo "${COSIGN_SHA256}  $tmp/cosign" | sha256sum -c -
+                  install -m 0755 "$tmp/cosign" /usr/local/bin/cosign
+                  rm -rf "$tmp"
             build:
               commands:
                 # ONE command block = one shell. CodeBuild runs each buildspec command in a SEPARATE shell,

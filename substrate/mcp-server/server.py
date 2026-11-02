@@ -2472,16 +2472,23 @@ def _bridge_settings_for(image_id: str) -> tuple[str, int]:
     return settings["protocol"], settings["port"]
 
 
-def _vm_proxy_token(vm_id: str) -> str:
-    """Short-lived MicroVM proxy auth token (X-aws-proxy-auth), cached per VM. IAM-gated via
-    lambda:CreateMicrovmAuthToken on the capsule image — same trust model as the relay's upstream."""
-    cached = _vm_proxy_tokens.get(vm_id)
+def _vm_proxy_token(vm_id: str, ports: tuple[int, ...] = (6905, 6906)) -> str:
+    """Short-lived MicroVM proxy auth token (X-aws-proxy-auth), cached per VM + port set.
+
+    IAM-gated via lambda:CreateMicrovmAuthToken on the capsule image — same trust model as the
+    relay's upstream. Ports are enumerated (never allPorts): allPorts also unlocked 5901 (Xvnc,
+    no auth), 9222 (Chromium CDP) and 50051 (DoomAgent gRPC), which bypass the input arbiter.
+    """
+    allowed_ports = tuple(sorted({int(p) for p in ports}))
+    cache_key = "%s:%s" % (vm_id, ",".join(str(p) for p in allowed_ports))
+    cached = _vm_proxy_tokens.get(cache_key)
     if cached and time.time() < cached[1] - 60:
         return cached[0]
     t = mvm.create_microvm_auth_token(
-        microvmIdentifier=vm_id, expirationInMinutes=10, allowedPorts=[{"allPorts": {}}])
+        microvmIdentifier=vm_id, expirationInMinutes=10,
+        allowedPorts=[{"port": p} for p in allowed_ports])
     val = t["authToken"]["X-aws-proxy-auth"]
-    _vm_proxy_tokens[vm_id] = (val, time.time() + 600)
+    _vm_proxy_tokens[cache_key] = (val, time.time() + 600)
     return val
 
 
@@ -2539,7 +2546,8 @@ def _bridge(
             raise RuntimeError("agent bridge capability is unavailable; relaunch the capsule")
         conn = http.client.HTTPSConnection(endpoint, 443, timeout=timeout_s)
         headers = {"Host": endpoint, "Content-Type": "application/json",
-                   "X-aws-proxy-auth": _vm_proxy_token(vm["id"]),
+                   "X-aws-proxy-auth": _vm_proxy_token(
+                       vm["id"], (bridge_port, COPLAY_STATE_PORT)),
                    "X-aws-proxy-port": str(bridge_port),
                    "X-Pairputer-Bridge-Capability": bridge_capability}
     try:
@@ -2880,7 +2888,7 @@ def _note_agent_action(identity: CallerIdentity, image_id: str, label: str) -> N
                 return
             conn = http.client.HTTPSConnection(endpoint, 443, timeout=5)
             headers = {"Host": endpoint, "Content-Type": "application/json",
-                       "X-aws-proxy-auth": _vm_proxy_token(vm["id"]),
+                       "X-aws-proxy-auth": _vm_proxy_token(vm["id"], (COPLAY_STATE_PORT,)),
                        "X-aws-proxy-port": str(COPLAY_STATE_PORT)}
         except Exception as exc:
             log.info("note_agent_action skipped: %s", exc)

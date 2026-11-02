@@ -25,6 +25,23 @@ import urllib.request
 
 BRIDGE = os.environ.get("PAIRPUTER_AUTOPILOT_BRIDGE", "http://127.0.0.1:6905")
 ARBITER = os.environ.get("PAIRPUTER_AUTOPILOT_ARBITER", "http://127.0.0.1:6906")
+BRIDGE_KEY_FILE = os.environ.get(
+    "PAIRPUTER_BRIDGE_CAPABILITY_FILE", "/run/pairputer/bridge-ingress.key")
+
+
+def _bridge_headers(extra=None):
+    """The bridge requires the root-only per-MicroVM capability on every call."""
+    headers = dict(extra or {})
+    try:
+        with open(BRIDGE_KEY_FILE, encoding="ascii") as fh:
+            capability = fh.read(257).strip()
+    except OSError:
+        capability = ""
+    if capability:
+        headers["X-Pairputer-Bridge-Capability"] = capability
+    return headers
+
+
 ENABLE = os.environ.get("PAIRPUTER_AUTOPILOT_ENABLE", "true").lower() not in ("", "0", "false", "no")
 # The demo goal: hunt+fight+advance (the "DoomGuy autopilot" contract). Overridable per deploy.
 GOAL = os.environ.get("PAIRPUTER_AUTOPILOT_GOAL", "clear the map of enemies and reach the exit")
@@ -45,7 +62,7 @@ def _get_json(url, timeout=3):
 
 def _post_json(url, body, timeout):
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
+                                 headers=_bridge_headers({"Content-Type": "application/json"}))
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
 

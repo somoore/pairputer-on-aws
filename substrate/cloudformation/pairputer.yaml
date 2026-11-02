@@ -394,10 +394,6 @@ Metadata:
         default: New VPC CIDR (Create* modes)
       FckNatAmiId:
         default: fck-nat AMI — leave blank to auto-resolve (advanced override only)
-      ContainerUri:
-        default: MCP server image URI
-      RelayContainerUri:
-        default: Stateful relay image URI
       CapsuleImageArnOverride:
         default: Existing bundled-capsule MicroVM image ARN override
       AllowCapsuleImageArnOverride:

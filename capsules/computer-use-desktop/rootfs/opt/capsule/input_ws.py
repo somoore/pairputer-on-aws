@@ -20,6 +20,12 @@ logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 PORT, STATE_PORT = 6904, 6906
 HOST = os.environ.get("PAIRPUTER_WS_BIND", "0.0.0.0")
 AGENT_KEY_FILE = os.environ.get("PAIRPUTER_AGENT_KEY_FILE", "/run/pairputer/agent-input.key")
+# Per-MicroVM viewer capability, root-provisioned from the Run hook (same value the relay reads
+# from the session row). Only a connection that proves it holds this key may claim actor="human".
+# Local dev (lower-assurance mode) sets the explicit opt-out below; the shipped posture is closed.
+VIEWER_KEY_FILE = os.environ.get("PAIRPUTER_VIEWER_KEY_FILE", "/run/pairputer/viewer-input.key")
+ALLOW_UNAUTHENTICATED_VIEWER = os.environ.get(
+    "PAIRPUTER_INPUT_ALLOW_UNAUTHENTICATED_VIEWER", "").strip().lower() in ("1", "true", "yes")
 COOLDOWN_S = float(os.environ.get("PAIRPUTER_AGENT_COOLDOWN_S", "0.6"))
 # After this much idle with no human or agent input, decay owner back to "idle" so the overlay stops
 # showing a stale actor. Also the poll cadence for the display-human-activity detector.
@@ -538,6 +544,11 @@ def _key():
     except OSError: return ""
 
 
+def _viewer_key():
+    try: return open(VIEWER_KEY_FILE, encoding="utf-8").read().strip()
+    except OSError: return ""
+
+
 def _websocket_origin(ws):
     request = getattr(ws, "request", None)
     headers = getattr(request, "headers", None) or getattr(ws, "request_headers", {})
@@ -583,6 +594,7 @@ async def handler(ws):
         await ws.close(code=1008, reason="direct browser input is forbidden")
         return
     agent = False
+    viewer = False
     async for raw in ws:
         try:
             if isinstance(raw, bytes) or len(raw) > 256 * 1024:
@@ -590,15 +602,32 @@ async def handler(ws):
             message = json.loads(raw)
             if not isinstance(message, dict): raise ValueError("input object required")
             if message.get("t") == "auth":
-                key = _key(); agent = bool(key) and hmac.compare_digest(str(message.get("key", "")), key)
-                await ws.send(json.dumps({"authenticated": agent})); continue
+                supplied = str(message.get("key", ""))
+                if message.get("mode") == "viewer":
+                    key = _viewer_key()
+                    viewer = bool(key) and hmac.compare_digest(supplied, key)
+                    agent = False
+                else:
+                    key = _key()
+                    agent = bool(key) and hmac.compare_digest(supplied, key)
+                    viewer = False
+                await ws.send(json.dumps(
+                    {"authenticated": agent or viewer, "agent": agent, "viewer": viewer}))
+                continue
             events = message.get("events") if message.get("t") == "batch" else [message]
-            # An authenticated batch may opt into the open CUA "raw" path (no proof/epoch);
-            # unauthenticated input is always "human". Raw still yields to the human via cooldown.
+            # Only an authenticated agent may act as the agent; only a connection proving the
+            # per-MicroVM viewer capability (the relay) may claim actor="human". Anything else is
+            # refused rather than silently promoted to the human channel — the old behaviour let
+            # any in-guest app/terminal process bump humanEpoch and seize the input arbiter.
             if agent:
                 actor = "agent_raw" if message.get("mode") == "raw" else "agent"
-            else:
+            elif viewer or ALLOW_UNAUTHENTICATED_VIEWER:
                 actor = "human"
+            else:
+                await ws.send(json.dumps(
+                    {"accepted": False, "reason": "unauthenticated"},
+                    separators=(",", ":")))
+                continue
             async with INJECTION_LOCK:
                 receipt = ARBITER.submit(actor, events,
                     message.get("expected_human_epoch"), message.get("display_revision"),

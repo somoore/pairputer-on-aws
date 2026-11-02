@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import importlib.util
@@ -448,6 +449,86 @@ class FakeCdpSessionMixin:
                 return parent.command(websocket, method, params or {})
 
         return Session()
+
+
+class _FakeInputSocket:
+    def __init__(self, messages, origin=None):
+        self._messages = list(messages)
+        self.sent = []
+        self.closed = []
+        self.request = SimpleNamespace(headers={"Origin": origin} if origin else {})
+
+    def __aiter__(self):
+        self._it = iter(self._messages)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
+
+    async def send(self, data):
+        self.sent.append(json.loads(data))
+
+    async def close(self, code=None, reason=None):
+        self.closed.append((code, reason))
+
+
+class _RecordingArbiter:
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, actor, events, *args, **kwargs):
+        self.calls.append((actor, events))
+        return {"accepted": True, "actor": actor}
+
+
+def _load_desktop_input_ws(name):
+    spec = importlib.util.spec_from_file_location(name, RUNTIME / "input_ws.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_input_ws_requires_viewer_capability_for_human_actor():
+    module = _load_desktop_input_ws("desktop_input_ws_auth")
+    arbiter = _RecordingArbiter()
+    module.ARBITER = arbiter
+    module.ALLOW_UNAUTHENTICATED_VIEWER = False
+    module._viewer_key = lambda: "v" * 43
+    module._key = lambda: "a" * 43
+
+    ws = _FakeInputSocket([
+        json.dumps({"t": "m", "x": 1, "y": 2}),                        # no auth at all
+        json.dumps({"t": "auth", "mode": "viewer", "key": "bad"}),      # wrong viewer key
+        json.dumps({"t": "m", "x": 3, "y": 4}),                        # still refused
+        json.dumps({"t": "auth", "mode": "viewer", "key": "v" * 43}),   # relay handshake
+        json.dumps({"t": "m", "x": 5, "y": 6}),                        # accepted as human
+    ])
+    asyncio.run(module.handler(ws))
+    assert arbiter.calls == [("human", [{"t": "m", "x": 5, "y": 6}])]
+    assert [m.get("reason") for m in ws.sent].count("unauthenticated") == 2
+    assert any(m.get("viewer") is True for m in ws.sent)
+
+
+def test_input_ws_agent_key_never_claims_human_and_origin_is_rejected():
+    module = _load_desktop_input_ws("desktop_input_ws_agent")
+    arbiter = _RecordingArbiter()
+    module.ARBITER = arbiter
+    module._viewer_key = lambda: "v" * 43
+    module._key = lambda: "a" * 43
+    ws = _FakeInputSocket([
+        json.dumps({"t": "auth", "key": "a" * 43}),
+        json.dumps({"t": "m", "x": 7, "y": 8}),
+    ])
+    asyncio.run(module.handler(ws))
+    assert arbiter.calls == [("agent", [{"t": "m", "x": 7, "y": 8}])]
+
+    blocked = _FakeInputSocket([json.dumps({"t": "m", "x": 9, "y": 9})],
+                               origin="https://attacker.example")
+    asyncio.run(module.handler(blocked))
+    assert blocked.closed and len(arbiter.calls) == 1
 
 
 def test_input_receipts_epoch_gate_and_held_cleanup(tmp_path):

@@ -29,6 +29,12 @@ fi
 (umask 0137; printf '%s\n' "$bridge_capability" > /run/pairputer/bridge-ingress.key)
 chmod 0640 /run/pairputer/bridge-ingress.key
 chown root:agent /run/pairputer/bridge-ingress.key
+# Same per-MicroVM capability, readable by the input-ws service user (inputd, group
+# pairputer-input): it authorises the relay's viewer channel, so an in-guest app/terminal process
+# can no longer claim actor="human". The Run hook rewrites both files atomically if it rekeys.
+(umask 0137; printf '%s\n' "$bridge_capability" > /run/pairputer/viewer-input.key)
+chmod 0640 /run/pairputer/viewer-input.key
+chown root:pairputer-input /run/pairputer/viewer-input.key
 unset bridge_capability PAIRPUTER_BRIDGE_BOOTSTRAP_CAPABILITY
 
 # Untrusted agent-run build/test commands use uid 1005.  They retain ordinary

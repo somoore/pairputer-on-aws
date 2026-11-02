@@ -217,6 +217,11 @@ Resources:
     Properties:
       InstanceType: t4g.nano
       ImageId: !Ref FckNatAmiId
+      # fck-nat runs in a public subnet with a role that can attach/move ENIs and EIPs, so IMDSv1
+      # (the default) is an unnecessary credential-theft path. fck-nat supports IMDSv2.
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
       IamInstanceProfile: !Ref FckNatInstanceProfile
       NetworkInterfaces:
         - NetworkInterfaceId: !Ref FckNatEni
