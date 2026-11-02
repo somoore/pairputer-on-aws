@@ -727,6 +727,22 @@ class TestCoordination(unittest.TestCase):
         hb_start = (REPO_ROOT / "capsules/hellbox-doom/rootfs/opt/capsule/start.sh").read_text()
         self.assertNotIn("agent-input.key", hb_start)
 
+    def test_doom_agent_bridge_requires_capability_and_rejects_origin(self):
+        # Parity with the Workbench bridge: the DOOM bridge must not accept /act or /input from
+        # an arbitrary in-guest process, and must never accept a browser-origin request.
+        bridge = (REPO_ROOT / "capsules/agent-doom/rootfs/opt/capsule/agent_bridge.py").read_text()
+        self.assertIn("X-Pairputer-Bridge-Capability", bridge)
+        self.assertIn("BRIDGE_KEY_FILE", bridge)
+        self.assertIn("hmac.compare_digest", bridge)
+        self.assertIn('self.headers.get("Origin")', bridge)
+        start = (REPO_ROOT / "capsules/agent-doom/rootfs/opt/capsule/start.sh").read_text()
+        self.assertIn("bridge-ingress.key", start)
+        self.assertIn("runHookPayload", start)
+        self.assertIn("_accept_run_hook", start)
+        # The in-guest autopilot calls the bridge directly, so it must present the capability.
+        autopilot = (REPO_ROOT / "capsules/agent-doom/rootfs/opt/capsule/autopilot.py").read_text()
+        self.assertIn("X-Pairputer-Bridge-Capability", autopilot)
+
     def test_session_token_carries_agent_interact_claim(self):
         # interaction.md: the session token states whether THIS capsule permits agent interaction.
         self.assertIn('"agentInteract"', SERVER)

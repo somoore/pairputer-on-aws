@@ -123,11 +123,16 @@ const identity = value => ({ present: true, valid: true, value });
   assert.equal(wedged.activeViewerId, "viewer_C");
   assert.equal(wedged.videoStreamCloser, null);
 
+  // Exhaustion must evict the OLDEST retired id, not lock the session out with a 429.
   const capped = makeSession("active", 9);
   for (let i = 0; i < MAX_RETIRED_VIEWERS; i += 1) capped.retiredViewerIds.add("old_" + i);
-  const limited = await claimViewer(capped, identity("new_viewer"));
-  assert.equal(limited.statusCode, 429);
-  assert.equal(capped.activeViewerId, "active");
+  const admitted = await claimViewer(capped, identity("new_viewer"));
+  assert.equal(admitted.ok, true);
+  assert.equal(capped.activeViewerId, "new_viewer");
+  assert.equal(capped.retiredViewerIds.size, MAX_RETIRED_VIEWERS);
+  assert.equal(capped.retiredViewerIds.has("old_0"), false);   // oldest evicted
+  assert.equal(capped.retiredViewerIds.has("old_1"), true);
+  assert.equal(capped.retiredViewerIds.has("active"), true);   // previous viewer still retired
 })().catch(error => { console.error(error); process.exitCode = 1; });
 '''
         result = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=10)
@@ -146,7 +151,11 @@ const identity = value => ({ present: true, valid: true, value });
         self.assertIn("sess.activeViewerGeneration += 1", relay)
         self.assertIn("waitMs: oldLease ? VIEWER_STREAM_HANDOFF_MS : 0", relay)
         self.assertIn("MAX_RETIRED_VIEWERS", relay)
-        self.assertNotIn("retiredViewerIds.delete", relay)
+        # Bounded LRU, not a one-way set that returns 429 forever once full.
+        self.assertIn("function retireViewerId(sess, viewerId)", relay)
+        self.assertIn(
+            "sess.retiredViewerIds.delete(sess.retiredViewerIds.values().next().value)", relay)
+        self.assertNotIn("viewer handoff limit reached", relay)
         self.assertIn("const VIEWER_ID=params.get('viewer')||", relay)
         self.assertIn("q.set('viewer',VIEWER_ID)", relay)
         self.assertIn("const RELAY_VIEWER_ID = crypto.randomUUID", app)
@@ -156,7 +165,7 @@ const identity = value => ({ present: true, valid: true, value });
 
         claim_section = relay[relay.index("async function claimViewer(sess, viewerIdentity, options = {})"):]
         release_index = claim_section.index("await releaseHeld(sess, oldState.heldKeys, oldState.heldButtons)")
-        retire_index = claim_section.index("sess.retiredViewerIds.add(oldLease.viewerId)")
+        retire_index = claim_section.index("retireViewerId(sess, oldLease.viewerId)")
         activate_index = claim_section.index("sess.activeViewerId = viewerId", retire_index)
         self.assertLess(release_index, retire_index)
         self.assertLess(retire_index, activate_index)

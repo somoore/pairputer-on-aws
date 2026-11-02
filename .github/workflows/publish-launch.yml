@@ -42,10 +42,12 @@ jobs:
     name: publish 1-click launch assets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned like publish-images.yml: this job holds id-token: write and can rewrite the
+      # public 1-click launch assets, so a repointed tag would be a credential-minting compromise.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

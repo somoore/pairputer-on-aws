@@ -92,13 +92,13 @@ Resources:
                 # Defense-in-depth: also require the STABLE numeric ids (rename-proof, exact).
                 token.actions.githubusercontent.com:repository_owner_id: !Ref GitHubOwnerId
                 token.actions.githubusercontent.com:repository_id: !Ref GitHubRepoId
-              StringLike:
                 # IAM REQUIRES a sub- (or job_workflow_ref-) scoped condition, so we must match `sub`.
                 # This account emits sub with numeric suffixes: repo:<org>@<ownerId>/<repo>@<repoId>:...
                 # so the plain "repo:org/repo:ref:..." never matched (the "Not authorized" failure).
-                # Anchor on the exact numeric prefix + ref; wildcard tail keeps us robust to trailing
-                # claim-format details. The numeric-id StringEquals conditions above are the real lock.
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:${GitHubRef}*"
+                # EXACT ref only: a StringLike "...:ref:refs/heads/main*" also matched refs/heads/main-fix,
+                # letting any branch whose name starts with "main" mint the push role and rewrite the
+                # public launch template. StringEquals + no wildcard closes that.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:${GitHubRef}"
       Policies:
         - PolicyName: EcrPublicPushScoped
           PolicyDocument:

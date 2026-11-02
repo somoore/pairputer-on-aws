@@ -89,6 +89,61 @@ def test_stager_lambda_code_in_template_matches_this_algorithm():
         assert needle in tpl, "stager template drifted from the proven staging algorithm: " + needle
 
 
+def _stager_context_hash_function():
+    """Extract the stager's inline context_tree_sha256() from the CloudFormation template."""
+    tpl = (REPO / "capsules/nested/capsule-stack.yaml").read_text()
+    start = tpl.index("def context_tree_sha256(zf):")
+    line_start = tpl.rfind("\n", 0, start) + 1
+    indent = start - line_start
+    first = tpl[start:tpl.index("\n", start)]
+    body = [first]
+    for line in tpl[start:].splitlines()[1:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line)
+    source = first + "\n" + "\n".join(
+        line[indent:] if line.strip() else "" for line in body[1:])
+    namespace = {"hashlib": hashlib}
+    exec(source, namespace)
+    return namespace["context_tree_sha256"]
+
+
+def _write_zip(path, entries):
+    import zipfile
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in entries:
+            zf.writestr(name, data)
+
+
+def test_stager_recomputes_the_packager_context_tree_hash(tmp_path):
+    """The recorded ContextSha256 must be verified against the zip we are about to stage, not merely
+    copied from the parameter/filename (that gap let a record disagree with the bytes)."""
+    import zipfile
+    path = tmp_path / "context.zip"
+    _write_zip(path, [("sub/b.txt", b"beta"), ("a.txt", b"alpha")])
+    with zipfile.ZipFile(path) as zf:
+        got = _stager_context_hash_function()(zf)
+    expected = hashlib.sha256(
+        (hashlib.sha256(b"alpha").hexdigest() + "  ./a.txt\n" +
+         hashlib.sha256(b"beta").hexdigest() + "  ./sub/b.txt\n").encode()
+    ).hexdigest()
+    assert got == expected
+
+    tpl = (REPO / "capsules/nested/capsule-stack.yaml").read_text()
+    assert "actual_ctx_sha = context_tree_sha256(zf)" in tpl
+    assert "if actual_ctx_sha != ctx_sha:" in tpl
+    assert "does not match recorded ContextSha256" in tpl
+
+
+def test_deploy_capsule_records_the_packager_tree_hash():
+    script = (REPO / "substrate/deploy-capsule.sh").read_text()
+    assert 'sed -n \'s/.*-context-\\(' in script
+    assert "could not read the context tree hash" in script
+    # the manifest/CFN parameter must be the value parsed from the uploaded object name
+    assert '"contextSha256":sys.argv[2]' in script
+    assert '"CapsuleContextSha256=${CONTEXT_DIGEST}"' in script
+
+
 if __name__ == "__main__":
     test_stager_matches_script_staging()
     test_stager_lambda_code_in_template_matches_this_algorithm()

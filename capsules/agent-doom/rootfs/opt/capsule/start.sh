@@ -7,10 +7,51 @@ rm -f "$READY_FLAG" 2>/dev/null || true
 
 # Readiness responder on :9000.
 cat > /opt/hook.py <<'PY'
-import os, sys, json
+import os, sys, json, re, tempfile, threading
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 FLAG = "/run/capsule.ready"
+# Per-MicroVM bridge capability. The Run hook delivers it before external traffic; the agent
+# bridge requires it on every /act, /input and /brain/* call, so an arbitrary in-guest process
+# can no longer drive the game as the authenticated agent.
+BRIDGE_KEY = "/run/pairputer/bridge-ingress.key"
+CAP_RE = re.compile(r"^[A-Za-z0-9_-]{43,256}$")
+HOOK_LOCK = threading.Lock()
+HOOK_ACCEPTED = False
+def _install_capability(value):
+    directory = os.path.dirname(BRIDGE_KEY)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".bridge-ingress-", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        handle = os.fdopen(fd, "w", encoding="ascii", closefd=True); fd = -1
+        with handle:
+            handle.write(value + "\n"); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, BRIDGE_KEY)
+        os.chmod(BRIDGE_KEY, 0o600)
+    finally:
+        if fd >= 0: os.close(fd)
+        try: os.unlink(temporary)
+        except FileNotFoundError: pass
+def _accept_run_hook(raw):
+    global HOOK_ACCEPTED
+    if os.environ.get("PAIRPUTER_DISABLE_RUN_HOOK_REKEY", "false").lower() in {"1", "true", "yes"}:
+        raise PermissionError("run hook rekeying is disabled")
+    with HOOK_LOCK:
+        if HOOK_ACCEPTED: raise FileExistsError("run hook was already accepted")
+        outer = json.loads(raw)
+        if not isinstance(outer, dict): raise ValueError("run hook body must be an object")
+        payload = outer.get("runHookPayload")
+        if not isinstance(payload, str) or len(payload.encode("utf-8")) > 16384:
+            raise ValueError("run hook payload is invalid")
+        value = json.loads(payload)
+        if not isinstance(value, dict) or set(value) != {"bridgeCapability"}:
+            raise ValueError("run hook payload schema is invalid")
+        capability = value["bridgeCapability"]
+        if not isinstance(capability, str) or not CAP_RE.fullmatch(capability):
+            raise ValueError("invalid bridge capability")
+        _install_capability(capability)
+        HOOK_ACCEPTED = True
 # Service-log readback over the loopback readiness port. Served UNCONDITIONALLY (the relay ships these to
 # CloudWatch for durable runtime logs) — safe because :9000 is loopback-only and the whole VM sits behind
 # the gateway's IAM auth, and these files never contain secrets (the agent-input key value is never logged).
@@ -56,7 +97,11 @@ class H(BaseHTTPRequestHandler):
         self._resp()
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0) or 0)
-        if n: self.rfile.read(n)
+        raw = self.rfile.read(n) if n else b""
+        path = self.path.split("?", 1)[0]
+        if path in {"/run", "/aws/lambda-microvms/runtime/v1/run"}:
+            try: _accept_run_hook(raw)
+            except Exception: pass  # capability stays closed; the bridge answers 403
         self._resp()
     def log_message(self, *a): pass
 # AWS probes the ready hook at http://127.0.0.1:9000/... (loopback). Bind loopback
@@ -93,7 +138,16 @@ LOG "video_ws (H.264) :6903 (pid $!)"
 install -d -m 0700 /run/pairputer
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /run/pairputer/agent-input.key
 chmod 0600 /run/pairputer/agent-input.key
-LOG "agent-input auth key provisioned"
+# Bridge ingress capability: root-only, replaced atomically by the Run hook with the per-MicroVM
+# value the MCP control plane holds. Until then the bridge fails closed (403 on every route).
+bridge_capability="${PAIRPUTER_BRIDGE_BOOTSTRAP_CAPABILITY:-}"
+if ! [[ "$bridge_capability" =~ ^[A-Za-z0-9_-]{43,256}$ ]]; then
+  bridge_capability="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
+(umask 0177; printf '%s\n' "$bridge_capability" > /run/pairputer/bridge-ingress.key)
+chmod 0600 /run/pairputer/bridge-ingress.key
+unset bridge_capability PAIRPUTER_BRIDGE_BOOTSTRAP_CAPABILITY
+LOG "agent-input + bridge capability keys provisioned"
 # input_ws in a restart loop: if it ever dies (e.g. an X hiccup), it must come back,
 # because a dead input_ws means keyboard/mouse silently stop working for the whole VM.
 ( while :; do

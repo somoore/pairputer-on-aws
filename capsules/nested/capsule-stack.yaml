@@ -252,6 +252,19 @@ Resources:
                   old = ssm.get_parameter(Name=name)["Parameter"]["Value"]
                   if old != value:
                       raise ValueError("immutable SSM collision at " + name)
+          def context_tree_sha256(zf):
+              # Recompute package-capsule-image.sh's content address from the zip bytes:
+              # sha256 of the sorted "<file-sha256>  ./<path>" lines. This is the value the
+              # uploader records, so it must describe the exact tree we are about to stage.
+              infos = [i for i in zf.infolist() if not i.is_dir()]
+              names = [i.filename for i in infos]
+              if len(names) != len(set(names)):
+                  raise ValueError("context zip contains duplicate entries")
+              digest = hashlib.sha256()
+              for info in sorted(infos, key=lambda i: i.filename):
+                  digest.update(hashlib.sha256(zf.read(info.filename)).hexdigest().encode())
+                  digest.update(("  ./" + info.filename + "\n").encode())
+              return digest.hexdigest()
           def handler(event, context):
               p = event.get("ResourceProperties", {})
               capsule_id = p.get("CapsuleId", "")
@@ -275,6 +288,11 @@ Resources:
                       ctx_sha = fm.group(1)
                   blob = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
                   with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+                      actual_ctx_sha = context_tree_sha256(zf)
+                      if actual_ctx_sha != ctx_sha:
+                          raise ValueError(
+                              "context zip tree hash %s does not match recorded ContextSha256 %s"
+                              % (actual_ctx_sha, ctx_sha))
                       try:
                           manifest = json.loads(zf.read("capsule.manifest.json"))
                       except KeyError:

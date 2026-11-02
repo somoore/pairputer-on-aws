@@ -22,6 +22,12 @@ const VIDEO_PORT = process.env.PAIRPUTER_VIDEO_PORT || "6903";
 const AUDIO_PORT = process.env.PAIRPUTER_AUDIO_PORT || "6902";
 const INPUT_PORT = process.env.PAIRPUTER_INPUT_PORT || "6904";
 const COPLAY_PORT = process.env.PAIRPUTER_COPLAY_PORT || "6906";  // input arbiter state (whose turn)
+// Ports this relay actually proxies. Never allPorts: that also unlocks 5901 (Xvnc with
+// -SecurityTypes None), 9222 (Chromium CDP) and 50051 (DoomAgent gRPC), which bypass the input
+// arbiter and the bridge capability. 9000 is the loopback-only log/readiness hook.
+const RELAY_PROXY_PORTS = [...new Set(
+  [AUDIO_PORT, VIDEO_PORT, INPUT_PORT, COPLAY_PORT, "9000"].map(Number),
+)];
 const SESSION_SECRET_ARN = process.env.PAIRPUTER_SESSION_SECRET_ARN || "";
 const ALLOW_UNSIGNED_DEV = process.env.PAIRPUTER_ALLOW_UNSIGNED_DEV === "1";
 const MIN_SESSION_SECRET_BYTES = 32;
@@ -428,6 +434,16 @@ function closeViewerEventSubscribers(sess, lease) {
   }
 }
 
+// Retirement only has to outlive VIEWER_STREAM_HANDOFF_MS, not the whole relay session. Bound the
+// set and evict the OLDEST id instead of refusing every new viewer once it fills (a ~128-reload
+// self-lockout, or a deliberate exhaustion by whoever holds the session URL).
+function retireViewerId(sess, viewerId) {
+  sess.retiredViewerIds.add(viewerId);
+  while (sess.retiredViewerIds.size > MAX_RETIRED_VIEWERS) {
+    sess.retiredViewerIds.delete(sess.retiredViewerIds.values().next().value);
+  }
+}
+
 async function claimViewer(sess, viewerIdentity, options = {}) {
   return withSessionLock(sess, "viewerClaimInflight", async () => {
     if (options.signal && options.signal.aborted) {
@@ -451,9 +467,6 @@ async function claimViewer(sess, viewerIdentity, options = {}) {
         waitMs: Math.max(0, sess.viewerReadyAt - Date.now()),
         lease: { viewerId, generation: sess.activeViewerGeneration, legacy: false },
       };
-    }
-    if (sess.activeViewerId && sess.retiredViewerIds.size >= MAX_RETIRED_VIEWERS) {
-      return { ok: false, statusCode: 429, reason: "viewer handoff limit reached" };
     }
     const hadViewerStreams = !!sess.audioStreamCloser || !!sess.videoStreamCloser;
     if (!closeViewerStreams(sess)) {
@@ -480,7 +493,7 @@ async function claimViewer(sess, viewerIdentity, options = {}) {
           if (options.signal && options.signal.aborted) throw new Error("viewer request closed");
           sess.viewerInputState.delete(viewerStateKey(oldLease));
           closeViewerEventSubscribers(sess, oldLease);
-          if (!oldLease.legacy) sess.retiredViewerIds.add(oldLease.viewerId);
+          if (!oldLease.legacy) retireViewerId(sess, oldLease.viewerId);
         }
         sess.viewerAware = true;
         sess.activeViewerGeneration += 1;
@@ -716,7 +729,7 @@ async function getUpstreamToken(sess) {
   const t = await mvm.send(new CreateMicrovmAuthTokenCommand({
     microvmIdentifier: sess.claims.microvmId,
     expirationInMinutes: 10,
-    allowedPorts: [{ allPorts: {} }],
+    allowedPorts: RELAY_PROXY_PORTS.map(port => ({ port })),
   }));
   sess.token = t.authToken["X-aws-proxy-auth"];
   sess.tokenExp = Date.now() + 10 * 60 * 1000;
@@ -1041,8 +1054,16 @@ async function ensureInputUpstream(sess) {
   sess.inputInflight = openUpstream(sess, "/pairputer/input", INPUT_PORT, () => {}, () => {
     sess.inputUpstream = null;
     sess.inputInflight = null;
-  }).then(up => {
+  }).then(async up => {
     if (up.isClosed()) throw Object.assign(new Error("upstream unavailable"), { statusCode: 502 });
+    // Authenticate the upstream BEFORE any input: the guest forces unauthenticated connections
+    // away from actor=human, so without this every viewer would lose input.
+    const capability = sess.viewerCapability || "";
+    if (!capability) {
+      try { up.close(); } catch {}
+      throw Object.assign(new Error("input capability unavailable"), { statusCode: 503 });
+    }
+    await up.sendText(JSON.stringify({ t: "auth", mode: "viewer", key: capability }));
     sess.inputUpstream = up;
     sess.inputInflight = null;
     return up;
@@ -1619,6 +1640,11 @@ async function authorize(reqUrl, channel) {
     return null;
   }
   if (!sessionClaimsFresh(claims, current)) return null;
+  // Per-MicroVM ingress capability (installed by the Run hook into the guest). The input arbiter
+  // requires it before it will label a connection as the human viewer, so only the relay — not an
+  // arbitrary in-guest process — can claim actor=human.
+  const viewerCapability = ddbAttrString(current.bridge_capability);
+  if (viewerCapability) getSession(claims).viewerCapability = viewerCapability;
   // Refuse to admit a STREAM while the control plane is suspending this VM — opening an upstream
   // (video/audio/input/player) auto-resumes it and defeats the freeze. Scope this to stream channels
   // only: /drain is channel "control" and IS how freeze quiesces the VM (blocking it would make freeze

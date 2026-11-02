@@ -33,6 +33,7 @@ proto the engine was compiled with — no hand-coded field names to drift.
 """
 import asyncio
 import base64
+import hmac
 import json
 import math
 import os
@@ -53,6 +54,10 @@ GRPC_TARGET = "127.0.0.1:50051"
 INPUT_WS = "ws://127.0.0.1:6904"
 PORT = 6905
 GRPC_TIMEOUT_S = 10
+# Per-MicroVM capability installed by the Run hook (start.sh). The MCP control plane sends it as
+# X-Pairputer-Bridge-Capability; without it any in-guest process could drive /act, /input and
+# /brain/* as the agent. Mirrors the Workbench bridge.
+BRIDGE_KEY_FILE = os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY_FILE", "/run/pairputer/bridge-ingress.key")
 
 
 def _stub():
@@ -417,7 +422,23 @@ ROUTES = {
 
 
 class H(BaseHTTPRequestHandler):
+    def _authorized(self) -> bool:
+        supplied = self.headers.get("X-Pairputer-Bridge-Capability", "")
+        if len(supplied) < 32 or len(supplied) > 256:
+            return False
+        try:
+            with open(BRIDGE_KEY_FILE, encoding="ascii") as fh:
+                expected = fh.read(257).strip()
+        except OSError:
+            return False
+        return len(expected) >= 32 and len(expected) <= 256 and hmac.compare_digest(
+            supplied, expected)
+
     def _dispatch(self, method: str):
+        if not self._authorized():
+            return self._send(403, {"error": {"code": "forbidden"}})
+        if method == "POST" and self.headers.get("Origin") is not None:
+            return self._send(403, {"error": {"code": "forbidden"}})
         handler = ROUTES.get((method, self.path))
         if handler is None:
             return self._send(404, {"error": f"no route {method} {self.path}"})

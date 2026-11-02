@@ -43,8 +43,8 @@ CAPSULE_DIR="${STAGE_ROOT}/${CAPSULE_DIR_NAME}"
 mkdir -m 0700 "${CAPSULE_DIR}"
 cp -a "${CAPSULE_SOURCE_DIR}/." "${CAPSULE_DIR}/"
 SOURCE_DIGEST_AFTER="$(python3 "${SCRIPT_DIR}/tree-digest.py" "${CAPSULE_SOURCE_DIR}")"
-CONTEXT_DIGEST="$(python3 "${SCRIPT_DIR}/tree-digest.py" "${CAPSULE_DIR}")"
-[[ "$SOURCE_DIGEST_BEFORE" == "$SOURCE_DIGEST_AFTER" && "$SOURCE_DIGEST_BEFORE" == "$CONTEXT_DIGEST" ]] \
+SNAPSHOT_DIGEST="$(python3 "${SCRIPT_DIR}/tree-digest.py" "${CAPSULE_DIR}")"
+[[ "$SOURCE_DIGEST_BEFORE" == "$SOURCE_DIGEST_AFTER" && "$SOURCE_DIGEST_BEFORE" == "$SNAPSHOT_DIGEST" ]] \
   || { echo "ERROR: capsule changed while creating the deployment snapshot" >&2; exit 1; }
 
 # Defaults derive from the capsule dir + its manifest; --flags override.
@@ -122,6 +122,13 @@ CONTEXT_URI="$(PAIRPUTER_MICROVM_CONTEXT_DIR="${CAPSULE_DIR}" \
   "${SCRIPT_DIR}/package-capsule-image.sh" "${ARTIFACT_BUCKET}" "capsules/${CAPSULE_ID}" | tail -n1)"
 [[ -n "${CONTEXT_URI}" ]] || { echo "ERROR: packaging failed" >&2; exit 1; }
 echo "    context: ${CONTEXT_URI}"
+# Record the packager's CONTENT-ADDRESSED tree hash (the one in the object name), not the
+# snapshot digest above: the manifest stager recomputes this value from the downloaded zip
+# entries and fails the deploy if it disagrees. The old tree-digest.py value could never match
+# the bytes, so the recorded contextSha256 was not verifiable at all.
+CONTEXT_DIGEST="$(printf '%s' "${CONTEXT_URI}" | sed -n 's/.*-context-\([a-f0-9]\{64\}\)\.zip$/\1/p')"
+[[ "${CONTEXT_DIGEST}" =~ ^[a-f0-9]{64}$ ]] \
+  || { echo "ERROR: could not read the context tree hash from ${CONTEXT_URI}" >&2; exit 1; }
 
 # 2. Write the capability manifest to SSM (if the capsule has one) so the MCP reads it at runtime.
 MANIFEST_SSM=""
