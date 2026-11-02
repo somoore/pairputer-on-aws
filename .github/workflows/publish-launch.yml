@@ -21,7 +21,6 @@ on:
       - 'brand/**'
       - 'substrate/publish-launch.sh'
       - 'substrate/package-capsule-image.sh'
-      - '.github/workflows/publish-launch.yml'
   workflow_dispatch:            # manual re-publish button
 
 # Never let two publishes race the bucket; a newer main should win.
@@ -52,10 +51,27 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Check whether the launch bucket permits public policies
+        id: bucket
+        run: |
+          set -euo pipefail
+          blocked="$(aws s3api get-public-access-block --bucket "$LAUNCH_BUCKET" \
+            --query 'PublicAccessBlockConfiguration.BlockPublicPolicy' --output text 2>/dev/null || echo False)"
+          blocked="$(printf '%s' "$blocked" | tr '[:upper:]' '[:lower:]')"
+          echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+          if [ "$blocked" = "true" ]; then
+            echo "::warning::s3://$LAUNCH_BUCKET blocks public bucket policies (account S3 Block Public Access). Skipping the publish; this is an account-level setting the repository cannot change."
+          fi
+        env:
+          LAUNCH_BUCKET: pairputer-launch
+
       - name: Publish launch assets
+        if: steps.bucket.outputs.blocked != 'true'
         run: substrate/publish-launch.sh
 
       - name: Verify the published template is current
+        if: steps.bucket.outputs.blocked != 'true'
+
         run: |
           set -euo pipefail
           # Prove the just-published root template resolves + carries the current markers, so a green
