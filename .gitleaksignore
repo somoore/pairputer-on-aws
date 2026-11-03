@@ -1,0 +1,7 @@
+# Reviewed non-credentials: example keys, test fixtures and documented
+# placeholders. The working tree keeps them deliberately (tests and docs);
+# these fingerprints cover the historical commits that still contain them.
+8b22200e0e6c73e8c50c81a022311a408aaf9320:findings.md:aws-access-token:62
+653d23eba8e378604bceb8d35c896b2b535ece68:tests/test_computer_use_brain.py:aws-access-token:191
+653d23eba8e378604bceb8d35c896b2b535ece68:tests/test_computer_use_runtime.py:generic-api-key:1000
+653d23eba8e378604bceb8d35c896b2b535ece68:tests/test_computer_use_runtime.py:generic-api-key:1017
