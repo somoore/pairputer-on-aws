@@ -743,6 +743,16 @@ class TestCoordination(unittest.TestCase):
         autopilot = (REPO_ROOT / "capsules/agent-doom/rootfs/opt/capsule/autopilot.py").read_text()
         self.assertIn("X-Pairputer-Bridge-Capability", autopilot)
 
+    def test_doom_eval_clients_present_capability(self):
+        # The host-side eval/behavior clients call the authenticated bridge directly, so each must
+        # resolve the capability (flag/env/key file) and send it on every request — otherwise the
+        # behavior harness and autonomy gates 403 on their first call.
+        for name in ("test_harness.py", "eval_gates.py", "eval_runner.py"):
+            client = (REPO_ROOT / "capsules/agent-doom" / name).read_text()
+            self.assertIn("X-Pairputer-Bridge-Capability", client, name)
+            self.assertIn("PAIRPUTER_BRIDGE_CAPABILITY", client, name)
+            self.assertIn("bridge-ingress.key", client, name)
+
     def test_session_token_carries_agent_interact_claim(self):
         # interaction.md: the session token states whether THIS capsule permits agent interaction.
         self.assertIn('"agentInteract"', SERVER)
