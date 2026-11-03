@@ -6,23 +6,60 @@ Usage (after ./substrate/local-dev.sh --capsule-only, or any capsule with the br
     python3 capsules/agent-doom/test_harness.py            # full suite
     python3 capsules/agent-doom/test_harness.py --bridge http://127.0.0.1:6905
 
+The bridge rejects unauthenticated callers (403), so the harness presents the per-MicroVM bridge
+capability like the in-guest autopilot does: --capability / PAIRPUTER_BRIDGE_CAPABILITY, else the
+key file (in-guest default /run/pairputer/bridge-ingress.key; substrate/local-dev.sh leaves the
+host copy at ${XDG_RUNTIME_DIR:-~/.cache/pairputer}/local-bridge-<capsule>.key).
+
 What it proves: strict-parse rejects bad payloads (no silent no-op), ACTION_SHOOT drops ammo,
 movement actually moves, and HOLD (hold_tics / movement default) produces a bigger step than a 1-tic tap.
 It also verifies the high-level brain endpoint accepts an objective and returns compact bounded status.
 """
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
 
 BRIDGE = "http://127.0.0.1:6905"
 
+# Capability sources, highest priority first: the PAIRPUTER_BRIDGE_CAPABILITY env var (or --capability),
+# then the key file (PAIRPUTER_BRIDGE_CAPABILITY_FILE overrides the in-guest default), then the file
+# substrate/local-dev.sh writes on the host for this capsule.
+_CAPABILITY_FILES = (
+    os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY_FILE", "/run/pairputer/bridge-ingress.key"),
+    os.path.join(os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.cache/pairputer"),
+                 "local-bridge-agent-doom.key"),
+)
+CAPABILITY = os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY", "")
+
+
+def bridge_capability() -> str:
+    """Resolve the bridge capability token (empty when unprovisioned; the bridge will 403)."""
+    global CAPABILITY
+    if CAPABILITY:
+        return CAPABILITY
+    for path in _CAPABILITY_FILES:
+        try:
+            with open(path, encoding="ascii") as fh:
+                cap = fh.read(257).strip()
+        except OSError:
+            continue
+        if len(cap) >= 32:  # same minimum the bridge's _authorized enforces
+            CAPABILITY = cap
+            return CAPABILITY
+    return ""
+
 
 def call(path, body=None, method="POST"):
     data = json.dumps(body or {}).encode() if method == "POST" else None
+    headers = {"Content-Type": "application/json"}
+    cap = bridge_capability()
+    if cap:
+        headers["X-Pairputer-Bridge-Capability"] = cap
     req = urllib.request.Request(BRIDGE + path, data=data, method=method,
-                                headers={"Content-Type": "application/json"})
+                                headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status, json.loads(r.read() or b"{}")
@@ -162,6 +199,11 @@ def run():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--bridge", default=BRIDGE)
+    ap.add_argument("--capability", default="",
+                    help="Bridge capability token; defaults to PAIRPUTER_BRIDGE_CAPABILITY "
+                         "or the provisioned key file")
     args = ap.parse_args()
     BRIDGE = args.bridge.rstrip("/")
+    if args.capability:
+        CAPABILITY = args.capability
     sys.exit(run())

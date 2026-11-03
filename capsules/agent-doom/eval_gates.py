@@ -10,14 +10,46 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
 
+# The bridge rejects unauthenticated callers (403), so the gates present the per-MicroVM bridge
+# capability like the in-guest autopilot does: --capability / PAIRPUTER_BRIDGE_CAPABILITY, else the
+# key file (in-guest default /run/pairputer/bridge-ingress.key; substrate/local-dev.sh leaves the
+# host copy at ${XDG_RUNTIME_DIR:-~/.cache/pairputer}/local-bridge-<capsule>.key).
+_CAPABILITY_FILES = (
+    os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY_FILE", "/run/pairputer/bridge-ingress.key"),
+    os.path.join(os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.cache/pairputer"),
+                 "local-bridge-agent-doom.key"),
+)
 
-def call(bridge: str, path: str, body: dict | None = None, *, method: str = "POST", timeout: int = 30) -> tuple[int, int, dict, int]:
+
+def bridge_capability(explicit: str = "") -> str:
+    """Resolve the bridge capability token (empty when unprovisioned; the bridge will 403)."""
+    cap = explicit or os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY", "")
+    if cap:
+        return cap
+    for path in _CAPABILITY_FILES:
+        try:
+            with open(path, encoding="ascii") as fh:
+                cap = fh.read(257).strip()
+        except OSError:
+            continue
+        if len(cap) >= 32:  # same minimum the bridge's _authorized enforces
+            return cap
+    return ""
+
+
+def call(bridge: str, path: str, body: dict | None = None, *, method: str = "POST", timeout: int = 30,
+         capability: str = "") -> tuple[int, int, dict, int]:
     data = json.dumps(body or {}).encode() if method == "POST" else None
-    req = urllib.request.Request(bridge + path, data=data, method=method, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    cap = bridge_capability(capability)
+    if cap:
+        headers["X-Pairputer-Bridge-Capability"] = cap
+    req = urllib.request.Request(bridge + path, data=data, method=method, headers=headers)
     start = time.time()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
@@ -152,5 +184,10 @@ def run(bridge: str) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bridge", default="http://127.0.0.1:6905")
+    parser.add_argument("--capability", default="",
+                        help="Bridge capability token; defaults to PAIRPUTER_BRIDGE_CAPABILITY "
+                             "or the provisioned key file")
     args = parser.parse_args()
+    if args.capability:
+        os.environ["PAIRPUTER_BRIDGE_CAPABILITY"] = args.capability
     sys.exit(run(args.bridge))

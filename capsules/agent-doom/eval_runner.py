@@ -31,11 +31,44 @@ from typing import Any
 
 DEFAULT_BRIDGE_URL = os.environ.get("AGENT_DOOM_BRIDGE_URL", "http://127.0.0.1:6905")
 DEFAULT_INPUT_WS_URL = os.environ.get("AGENT_DOOM_INPUT_WS_URL", "ws://127.0.0.1:6904")
+# The bridge rejects unauthenticated callers (403), so direct/tmux clients present the per-MicroVM
+# bridge capability like the in-guest autopilot does: --capability / PAIRPUTER_BRIDGE_CAPABILITY,
+# else the key file (in-guest default /run/pairputer/bridge-ingress.key; substrate/local-dev.sh
+# leaves the host copy at ${XDG_RUNTIME_DIR:-~/.cache/pairputer}/local-bridge-<capsule>.key).
+_CAPABILITY_FILES = (
+    os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY_FILE", "/run/pairputer/bridge-ingress.key"),
+    os.path.join(os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.cache/pairputer"),
+                 "local-bridge-agent-doom.key"),
+)
 RESPONSE_BUDGET_BYTES = int(os.environ.get("AGENT_DOOM_RESPONSE_BUDGET_BYTES", "500"))
 RESULT_MARKER = "EVAL_RESULT_JSON"
 E1M1_SPAWN_X_FP = 69206016
 E1M1_SPAWN_Y_FP = -236978176
 E1M1_SPAWN_TOLERANCE_FP = 8 * 65536
+
+
+def resolve_bridge_capability(explicit: str = "") -> str:
+    """Resolve the bridge capability token (empty when unprovisioned; the bridge will 403)."""
+    cap = explicit or os.environ.get("PAIRPUTER_BRIDGE_CAPABILITY", "")
+    if cap:
+        return cap
+    for path in _CAPABILITY_FILES:
+        try:
+            with open(path, encoding="ascii") as fh:
+                cap = fh.read(257).strip()
+        except OSError:
+            continue
+        if len(cap) >= 32:  # same minimum the bridge's _authorized enforces
+            return cap
+    return ""
+
+
+def _bridge_headers(capability: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+    headers = dict(extra or {})
+    if capability:
+        headers["X-Pairputer-Bridge-Capability"] = capability
+    return headers
+
 
 
 @dataclass(frozen=True)
@@ -120,12 +153,14 @@ class DirectBridgeClient:
         timeout_s: float = 180.0,
         trace_recent: int = 0,
         poll_interval_s: float = 1.0,
+        capability: str = "",
     ) -> None:
         self.bridge_url = bridge_url.rstrip("/")
         self.input_ws_url = input_ws_url
         self.timeout_s = float(timeout_s)
         self.trace_recent = max(0, int(trace_recent or 0))
         self.poll_interval_s = max(0.2, float(poll_interval_s))
+        self.capability = resolve_bridge_capability(capability)
 
     def _goal_payload(self, case: EvalCase) -> dict[str, Any]:
         payload = _case_payload_with_wall_budget(case, self.timeout_s)
@@ -241,13 +276,15 @@ class DirectBridgeClient:
 
     def _post(self, path: str, payload: dict[str, Any], *, timeout_s: float | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self.bridge_url + path, data=data, method="POST", headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(self.bridge_url + path, data=data, method="POST",
+                                     headers=_bridge_headers(self.capability, {"Content-Type": "application/json"}))
         with urllib.request.urlopen(req, timeout=float(timeout_s or 20.0)) as resp:
             return json.loads(resp.read() or b"{}")
 
     def _get(self, path: str) -> dict[str, Any]:
         try:
-            with urllib.request.urlopen(self.bridge_url + path, timeout=5.0) as resp:
+            req = urllib.request.Request(self.bridge_url + path, headers=_bridge_headers(self.capability))
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
                 data = json.loads(resp.read() or b"{}")
                 return data if isinstance(data, dict) else {}
         except Exception:
@@ -364,6 +401,7 @@ class TmuxCodexClient:
         open_timeout_s: float = 20.0,
         poll_interval_s: float = 1.0,
         require_summary: bool = True,
+        capability: str = "",
     ) -> None:
         if not target:
             raise SystemExit("--tmux-target is required for tmux-codex mode")
@@ -374,6 +412,7 @@ class TmuxCodexClient:
         self.open_timeout_s = float(open_timeout_s)
         self.poll_interval_s = max(0.2, float(poll_interval_s))
         self.require_summary = bool(require_summary)
+        self.capability = resolve_bridge_capability(capability)
 
     def run_case(self, case: EvalCase) -> dict[str, Any]:
         started = time.perf_counter()
@@ -476,14 +515,16 @@ class TmuxCodexClient:
 
     def _post_json(self, path: str, payload: dict[str, Any], *, timeout_s: float | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self.bridge_url + path, data=data, method="POST", headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(self.bridge_url + path, data=data, method="POST",
+                                     headers=_bridge_headers(self.capability, {"Content-Type": "application/json"}))
         with urllib.request.urlopen(req, timeout=float(timeout_s or 20.0)) as resp:
             result = json.loads(resp.read() or b"{}")
             return result if isinstance(result, dict) else {}
 
     def _get_json(self, path: str) -> dict[str, Any]:
         try:
-            with urllib.request.urlopen(self.bridge_url + path, timeout=2.0) as resp:
+            req = urllib.request.Request(self.bridge_url + path, headers=_bridge_headers(self.capability))
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
                 data = json.loads(resp.read() or b"{}")
                 return data if isinstance(data, dict) else {}
         except Exception:
@@ -1036,6 +1077,7 @@ def make_client(args: argparse.Namespace):
             timeout_s=args.timeout_s,
             trace_recent=args.trace_recent,
             poll_interval_s=args.direct_poll_interval_s,
+            capability=args.capability,
         )
     if args.mode == "mcp-command":
         return McpCommandClient(args.command, timeout_s=args.timeout_s)
@@ -1048,6 +1090,7 @@ def make_client(args: argparse.Namespace):
             open_timeout_s=args.tmux_open_timeout_s,
             poll_interval_s=args.tmux_poll_interval_s,
             require_summary=not args.no_require_tmux_summary,
+            capability=args.capability,
         )
     raise SystemExit(f"unknown mode: {args.mode}")
 
@@ -1057,6 +1100,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--mode", choices=("direct", "mcp-command", "tmux-codex"), default="direct")
     parser.add_argument("--cases", type=Path, help="JSON array/object of eval cases. Defaults to the core product matrix.")
     parser.add_argument("--bridge-url", default=DEFAULT_BRIDGE_URL)
+    parser.add_argument("--capability", default="",
+                        help="Bridge capability token; defaults to PAIRPUTER_BRIDGE_CAPABILITY "
+                             "or the provisioned key file")
     parser.add_argument("--input-ws-url", default=DEFAULT_INPUT_WS_URL)
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--jsonl", type=Path, default=Path("capsules/agent-doom/eval-results/scoreboard.jsonl"))
