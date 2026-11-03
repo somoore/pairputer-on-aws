@@ -159,6 +159,14 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:s3:::${ThirdPartyMirrorBucket}"
                   - !Sub "arn:aws:s3:::${ThirdPartyMirrorBucket}/*"
+              # Read-only preflight in publish-launch: an account-level Block Public Access setting
+              # rejects the launch bucket policy and cannot be cleared by this role. The account
+              # setting has no resource ARN, so AWS requires "*".
+              - Sid: ReadAccountPublicAccessBlock
+                Effect: Allow
+                Action:
+                  - s3:GetAccountPublicAccessBlock
+                Resource: "*"
 
   McpRepo:
     Type: AWS::ECR::PublicRepository
